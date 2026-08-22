@@ -200,6 +200,7 @@ const app = createApp({
             fontFamilies: fontFamilyOptions,
             fontSizes: fontSizeOptions,
             imageCounts: imageGenCountOptions,
+            imageModels: imageModelOptions,
             imageSizes: imageSizeOptions,
             imageStyles: imageStyleOptions,
             popularModelFamilies,
@@ -383,7 +384,9 @@ const app = createApp({
                 scrollRevealObserver = new IntersectionObserver((entries) => {
                     entries.forEach(entry => {
                         if (entry.isIntersecting) {
+                            entry.target.dataset.revealed = 'true';
                             entry.target.classList.add('reveal-active');
+                            scrollRevealObserver.unobserve(entry.target);
                         }
                     });
                 }, {
@@ -398,7 +401,7 @@ const app = createApp({
             if (!scrollRevealObserver) initScrollReveal();
             if (scrollRevealObserver && newEls) {
                 newEls.forEach(el => {
-                    if (el instanceof HTMLElement && !el.classList.contains('reveal-active')) {
+                    if (el instanceof HTMLElement && el.dataset.revealed !== 'true' && !el.classList.contains('reveal-active')) {
                         scrollRevealObserver.observe(el);
                     }
                 });
@@ -550,6 +553,7 @@ const app = createApp({
         const user = reactive({
             name: '请前往设置自定义你的名称',
             description: '',
+            preferences: '',
             avatar: '',
             person: 'second', //记录人称偏好：second 或 third
         });
@@ -569,6 +573,7 @@ const app = createApp({
                     const currentProfile = userProfiles.value[profileIndex];
                     if (currentProfile.name !== newVal.name ||
                         currentProfile.description !== newVal.description ||
+                        currentProfile.preferences !== newVal.preferences ||
                         currentProfile.avatar !== newVal.avatar ||
                         currentProfile.person !== newVal.person) {
                         userProfiles.value[profileIndex] = JSON.parse(JSON.stringify(newVal));
@@ -609,6 +614,7 @@ const app = createApp({
             imageGenKey: '',
             imageStyle: 'vertical',
             customImageArtists: '',
+            imageModel: 'nai-diffusion-4-5-full',
             imageSize: '竖图',
             imageGenCount: 2,
             qualityModel: DEFAULT_API_CONFIG.qualityModel,
@@ -616,6 +622,12 @@ const app = createApp({
             fastModel: DEFAULT_API_CONFIG.fastModel,
             visionModel: ''
         });
+        const v5UnsupportedImageStyles = new Set(['r18', 'lolita25d', 'anime']);
+        const availableImageStyleOptions = computed(() => settings.imageModel === 'nai-diffusion-5-full'
+            ? imageStyleOptions.filter(option => !v5UnsupportedImageStyles.has(option.value))
+            : imageStyleOptions);
+        const getImageModelName = (value) => (imageModelOptions.find(option => option.value === value)?.label
+            || imageModelOptions[0].label).replace(/（[^）]*）$/, '');
         const normalizeFontFamily = (value) => ['modern', 'serif', 'system'].includes(value) ? value : 'modern';
         const normalizeFontSize = (value) => {
             const size = Number(value);
@@ -797,7 +809,7 @@ const app = createApp({
         }, { deep: true });
 
         // Watch image gen and model settings for sync
-        watch(() => [settings.imageGenKey, settings.imageStyle, settings.customImageArtists, settings.imageGenCount, settings.qualityModel, settings.balancedModel, settings.fastModel, settings.uiTemplateModel, settings.fontFamily, settings.fontFamilyVersion], () => {
+        watch(() => [settings.imageGenKey, settings.imageModel, settings.imageStyle, settings.customImageArtists, settings.imageGenCount, settings.qualityModel, settings.balancedModel, settings.fastModel, settings.uiTemplateModel, settings.fontFamily, settings.fontFamilyVersion], () => {
             syncSettingsToGenerator();
         });
 
@@ -821,10 +833,10 @@ const app = createApp({
         });
         const reasoningEffortOptions = [
             { value: 'none', label: '关闭' },
-            { value: 'low', label: '低' },
-            { value: 'medium', label: '中' },
-            { value: 'high', label: '高' },
-            { value: 'max', label: '最高' },
+            { value: 'low', label: '低（low）' },
+            { value: 'medium', label: '中（medium）' },
+            { value: 'high', label: '高（high）' },
+            { value: 'max', label: '最高（max）' },
             { value: '', label: '默认' }
         ];
         const reasoningEffortSlider = computed({
@@ -1752,6 +1764,13 @@ const app = createApp({
                 settings.fontFamily = normalizeFontFamily(settings.fontFamily);
                 settings.fontSize = normalizeFontSize(settings.fontSize);
                 if (settings.reasoningEffort === 'xhigh') settings.reasoningEffort = 'max';
+                if (!imageModelOptions.some(option => option.value === settings.imageModel)) {
+                    settings.imageModel = imageModelOptions[0].value;
+                }
+                if (!imageSizeOptions.some(option => option.value === settings.imageSize)) {
+                    const legacySize = String(settings.imageSize || '');
+                    settings.imageSize = legacySize.includes('横') ? '横图' : legacySize.includes('方') ? '方图' : '竖图';
+                }
                 settings.fontFamilyVersion = 4;
                 applyFontFamily(settings.fontFamily);
                 delete settings.renderLayerLimit;
@@ -1803,7 +1822,7 @@ const app = createApp({
                 const savedActiveId = await getStoredValue('active_profile_id');
 
                 if (savedProfiles && savedProfiles.length > 0) {
-                    userProfiles.value = savedProfiles;
+                    userProfiles.value = savedProfiles.map(profile => ({ ...profile, preferences: String(profile?.preferences || '') }));
                     activeProfileId.value = savedActiveId || savedProfiles[0].uuid;
                     const activeProfile = userProfiles.value.find(p => p.uuid === activeProfileId.value);
                     if (activeProfile) {
@@ -2163,14 +2182,16 @@ const app = createApp({
             const targetArtists = cardUtils.getImageStyleArtists(settings.imageStyle, settings.customImageArtists);
             const styleName = imageStyleOptions.find(option => option.value === settings.imageStyle)?.label
                 || imageStyleOptions[0].label;
+            const modelName = getImageModelName(settings.imageModel);
 
-            // 动态替换 URL 中的 artist 和 size 参数
+            // 动态替换 URL 中的 model、artist 和 size 参数
             const encodedTargetArtists = encodeURIComponent(targetArtists);
             const oldReplacement = regex.replacement;
             let newReplacement = oldReplacement.replace(/artist=[\s\S]*?(&size=)/, 'artist=' + encodedTargetArtists + '$1');
             if (newReplacement === oldReplacement) {
                 newReplacement = oldReplacement.replace(/artist=[^&]+/, 'artist=' + encodedTargetArtists);
             }
+            newReplacement = newReplacement.replace(/model=[^&]+/, 'model=' + settings.imageModel);
             newReplacement = newReplacement.replace(/size=[^&]+/, 'size=' + settings.imageSize);
             regex.replacement = newReplacement;
 
@@ -2179,6 +2200,10 @@ const app = createApp({
             const oldArtist = oldReplacement.match(/artist=([\s\S]*?)&size=/)?.[1] || oldReplacement.match(/artist=([^&]+)/)?.[1];
             if (oldArtist !== encodedTargetArtists) {
                 messages.push(styleName);
+            }
+            const oldModel = oldReplacement.match(/model=([^&]+)/)?.[1];
+            if (oldModel !== settings.imageModel) {
+                messages.push(modelName);
             }
             // 检查 Size 变化
             const oldSize = oldReplacement.match(/size=([^&]+)/)?.[1];
@@ -2220,6 +2245,16 @@ const app = createApp({
                 updateImageGenRegexState({ enableRegex: isAutoImageGenEnabled.value });
             }
         });
+
+        watch(() => settings.imageModel, (imageModel) => {
+            if (imageModel === 'nai-diffusion-5-full' && v5UnsupportedImageStyles.has(settings.imageStyle)) {
+                settings.imageStyle = 'vertical';
+            }
+            const messages = updateImageGenRegexState({ enableRegex: isAutoImageGenEnabled.value });
+            if (isAutoImageGenEnabled.value && messages && messages.length > 0) {
+                showToast(`生图版本已切换：${getImageModelName(imageModel)}`, 'success');
+            }
+        }, { flush: 'sync' });
 
         watch(() => settings.imageSize, () => {
             const messages = updateImageGenRegexState({ enableRegex: isAutoImageGenEnabled.value });
@@ -3772,7 +3807,6 @@ const app = createApp({
                     showToast('消息已保存', 'success');
                     return;
                 }
-
                 abortConversationBackgroundWork();
                 const snapshot = await ensureConversationMessageIds();
                 const affectedTurn = snapshot.turns.find(turnInfo =>
@@ -8000,7 +8034,7 @@ const app = createApp({
             const targetArtists = cardUtils.getImageStyleArtists(settings.imageStyle, settings.customImageArtists);
 
             const encodedTargetArtists = encodeURIComponent(targetArtists);
-            const imageRequestUrl = `${baseUrl}/generate?tag=$1&token=${encodeURIComponent(imageGenToken)}&model=nai-diffusion-4-5-full&artist=${encodedTargetArtists}&size=${settings.imageSize}&steps=40&scale=6&cfg=0&sampler=k_dpmpp_2m_sde&negative={{{{bad anatomy}}}},{bad feet},bad hands,{{{bad proportions}}},{blurry},cloned face,cropped,{{{deformed}}},{{{disfigured}}},error,{{{extra arms}}},{extra digit},{{{extra legs}}},extra limbs,{{extra limbs}},{fewer digits},{{{fused fingers}}},gross proportions,ink eyes,ink hair,jpeg artifacts,{{{{long neck}}}},low quality,{malformed limbs},{{missing arms}},{missing fingers}},{{missing legs}},{{{more than 2 nipples}}},mutated hands,{{{mutation}}},normal quality,owres,{{poorly drawn face}},{{poorly drawn hands}},reen eyes,signature,text,{{too many fingers}},{{{ugly}}},username,uta,watermark,worst quality,{{{more than 2 legs}}},awkward hand sign,weird hand gesture,contorted hand,unnatural finger pose,deformed hand gesture,{shaka},{hang loose},{{rock on}},{shaka sign}&nocache=0&noise_schedule=karras`;
+            const imageRequestUrl = `${baseUrl}/generate?tag=$1&token=${encodeURIComponent(imageGenToken)}&model=${settings.imageModel}&artist=${encodedTargetArtists}&size=${settings.imageSize}&steps=40&scale=6&cfg=0&sampler=k_dpmpp_2m_sde&negative={{{{bad anatomy}}}},{bad feet},bad hands,{{{bad proportions}}},{blurry},cloned face,cropped,{{{deformed}}},{{{disfigured}}},error,{{{extra arms}}},{extra digit},{{{extra legs}}},extra limbs,{{extra limbs}},{fewer digits},{{{fused fingers}}},gross proportions,ink eyes,ink hair,jpeg artifacts,{{{{long neck}}}},low quality,{malformed limbs},{{missing arms}},{missing fingers}},{{missing legs}},{{{more than 2 nipples}}},mutated hands,{{{mutation}}},normal quality,owres,{{poorly drawn face}},{{poorly drawn hands}},reen eyes,signature,text,{{too many fingers}},{{{ugly}}},username,uta,watermark,worst quality,{{{more than 2 legs}}},awkward hand sign,weird hand gesture,contorted hand,unnatural finger pose,deformed hand gesture,{shaka},{hang loose},{{rock on}},{shaka sign}&nocache=0&noise_schedule=karras`;
             const imageGenRegexContent = {
                 name: imageGenRegexName,
                 regex: '/image###([\\s\\S]*?)###/g',
@@ -8025,7 +8059,7 @@ const app = createApp({
 
             // 2. 自动生图世界书
             const autoImageGenWIName = '自动生图';
-            const imageGenCount = Math.min(6, Math.max(1, Number(settings.imageGenCount) || 2));
+            const imageGenCount = Math.min(8, Math.max(1, Number(settings.imageGenCount) || 2));
             const autoImageGenWIContent = {
                 comment: autoImageGenWIName,
                 keys: [],
@@ -8265,55 +8299,46 @@ const app = createApp({
                 showToast('请选择需要删除的分支，主线不能删除', 'warning');
                 return;
             }
-            const childrenByParent = new Map();
-            storyBranches.value.forEach(branch => {
-                if (!childrenByParent.has(branch.parentId)) childrenByParent.set(branch.parentId, []);
-                childrenByParent.get(branch.parentId).push(branch.id);
-            });
-            const deleteIds = new Set();
-            const stack = [target.id];
-            while (stack.length > 0) {
-                const branchId = stack.pop();
-                if (deleteIds.has(branchId)) continue;
-                deleteIds.add(branchId);
-                stack.push(...(childrenByParent.get(branchId) || []));
-            }
-            const childCount = deleteIds.size - 1;
-            const childHint = childCount > 0 ? `及其 ${childCount} 条子分支` : '';
+            const parentId = storyBranches.value.some(branch => branch.id === target.parentId)
+                ? target.parentId
+                : STORY_BRANCH_MAIN_ID;
+            const parent = storyBranches.value.find(branch => branch.id === parentId);
+            const hasChildren = storyBranches.value.some(branch => branch.parentId === target.id);
             confirmAction(
-                `确定要删除“${target.name}”${childHint}吗？相关聊天、记忆和 UI 状态也会删除，此操作无法撤销。`,
+                `确定要删除“${target.name}”吗？${hasChildren ? `下级分支会顺延到“${parent?.name || '主线'}”下，` : ''}该分支的聊天、记忆和 UI 状态会被删除，此操作无法撤销。`,
                 async () => {
                     try {
-                        if (deleteIds.has(activeStoryBranchId.value)) {
-                            await switchStoryBranch(STORY_BRANCH_MAIN_ID, { closeModal: false, notify: false });
-                            if (activeStoryBranchId.value !== STORY_BRANCH_MAIN_ID) {
-                                throw new Error('无法切换到主线');
+                        if (target.id === activeStoryBranchId.value) {
+                            await switchStoryBranch(parentId, { closeModal: false, notify: false });
+                            if (activeStoryBranchId.value !== parentId) {
+                                throw new Error(`无法切换到“${parent?.name || '主线'}”`);
                             }
                         }
                         storyBranchSwitching.value = true;
                         if (!getMainDb()) await initDB();
-                        const scopeIds = [...deleteIds].map(branchId => getStoryBranchScopeId(char.uuid, branchId));
-                        await Promise.all(scopeIds.flatMap(scopeId => [
+                        const scopeId = getStoryBranchScopeId(char.uuid, target.id);
+                        await Promise.all([
                             deleteScopedStoredValue('chat', scopeId),
                             deleteScopedStoredValue('memories', scopeId),
                             deleteScopedStoredValue('classic_memories', scopeId)
-                        ]));
-                        scopeIds.forEach(scopeId => {
-                            delete memorySettings.emptyTurns?.[getMemoryEmptyTurnsKey(scopeId)];
-                        });
+                        ]);
+                        delete memorySettings.emptyTurns?.[getMemoryEmptyTurnsKey(scopeId)];
                         getUiTemplatesForRuntime(char).forEach(template => {
                             if (!template.runtimeByCharacter) return;
-                            scopeIds.forEach(scopeId => delete template.runtimeByCharacter[scopeId]);
+                            delete template.runtimeByCharacter[scopeId];
                         });
-                        storyBranches.value = storyBranches.value.filter(branch => !deleteIds.has(branch.id));
-                        selectedStoryBranchId.value = activeStoryBranchId.value;
+                        storyBranches.value.forEach(branch => {
+                            if (branch.parentId === target.id) branch.parentId = parentId;
+                        });
+                        storyBranches.value = storyBranches.value.filter(branch => branch.id !== target.id);
+                        selectedStoryBranchId.value = parentId;
                         await Promise.all([
                             saveStoryBranchesForCharacter(char),
                             saveMemorySettingsNow(),
                             setStoredValue('global_ui_templates', globalUiTemplates.value),
                             saveCharactersNow()
                         ]);
-                        showToast(`已删除“${target.name}”${childHint}`, 'success');
+                        showToast(`已删除“${target.name}”${hasChildren ? '，下级分支已顺延保留' : ''}`, 'success');
                     } catch (error) {
                         console.error('Failed to delete story branch:', error);
                         showToast(`删除分支失败：${error.message || '请稍后重试'}`, 'error');
@@ -9352,7 +9377,7 @@ const app = createApp({
             const profile = userProfiles.value.find(p => p.uuid === id);
             if (profile) {
                 activeProfileId.value = id;
-                Object.assign(user, JSON.parse(JSON.stringify(profile)));
+                Object.assign(user, { preferences: '', ...JSON.parse(JSON.stringify(profile)) });
                 saveData();
                 showToast(`已切换为人设: ${user.name}`, 'success');
             }
@@ -9363,6 +9388,7 @@ const app = createApp({
                 uuid: generateUUID(),
                 name: '新人设',
                 description: '',
+                preferences: '',
                 avatar: null,
                 person: 'second'
             };
@@ -9530,7 +9556,7 @@ const app = createApp({
             updateModalRef, latestUpdateConfig,
             showConfirmModal, confirmMessage, modelMode, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, showNoMemoryNeededModal, // Export for template
             isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
-            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontFamilyOptions, fontSizeOptions, imageStyleOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, regexScripts, worldInfo,
+            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontFamilyOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, regexScripts, worldInfo,
             activeTools, activeToolAggressivenessOptions: ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS, editingActiveTool, normalizeActiveTools, isWebActiveTool, getActiveToolDisplayDescription, getActiveToolResultCountMin, getActiveToolResultCountMax,
             getToolCallModeText, hasThinkingOrTools, isMessageThinkingOrRunning, isThinkingSummaryOpen, toggleThinkingSummary, markThinkingSummaryDetailOpened, getTimelineSteps,
             chatRoundStats, conversationBodyLength, summaryCompressedBodyLength, summaryCompressionRate,
