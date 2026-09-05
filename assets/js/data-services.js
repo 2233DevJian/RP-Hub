@@ -11,8 +11,8 @@
     let legacyDb = null;
     let initPromise = null;
 
-    const openAppDB = (name) => new Promise((resolve, reject) => {
-        const request = indexedDB.open(name, DB_VERSION);
+    const openAppDB = (name, version = DB_VERSION) => new Promise((resolve, reject) => {
+        const request = indexedDB.open(name, version);
         request.onerror = (event) => reject(`DB Error: ${event.target.error}`);
         request.onsuccess = (event) => resolve(event.target.result);
         request.onupgradeneeded = (event) => {
@@ -28,8 +28,12 @@
             mainDb = await openAppDB(DB_NAME);
             try {
                 const dbList = typeof indexedDB.databases === 'function' ? await indexedDB.databases() : null;
-                const shouldOpenLegacy = !dbList || dbList.some(item => item?.name === LEGACY_DB_NAME);
-                if (shouldOpenLegacy) legacyDb = await openAppDB(LEGACY_DB_NAME);
+                const legacyInfo = dbList?.find(item => item?.name === LEGACY_DB_NAME);
+                const shouldOpenLegacy = !dbList || !!legacyInfo;
+                if (shouldOpenLegacy) {
+                    const legacyVersion = Math.max(DB_VERSION, Number(legacyInfo?.version) || DB_VERSION);
+                    legacyDb = await openAppDB(LEGACY_DB_NAME, legacyVersion);
+                }
             } catch (error) {
                 console.warn('Legacy DB check failed:', error);
             }
@@ -1045,11 +1049,14 @@
 
         const assistantTopEntries = Array.isArray(groups.assistant_top) ? groups.assistant_top : [];
         if (assistantTopEntries.length > 0) {
-            finalMessages.push({
-                role: 'system',
-                content: `[Instructions for next message]\n${joinEntries(assistantTopEntries)}`,
-                _worldInfoEntries: assistantTopEntries
-            });
+            const lastAssistantMessage = finalMessages.slice().reverse().find(message => message?.role === 'assistant');
+            if (lastAssistantMessage) {
+                lastAssistantMessage.content = `${joinEntries(assistantTopEntries)}\n\n${lastAssistantMessage.content}`;
+                lastAssistantMessage._worldInfoEntries = [
+                    ...(lastAssistantMessage._worldInfoEntries || []),
+                    ...assistantTopEntries
+                ];
+            }
         }
         return finalMessages;
     };
@@ -1634,24 +1641,19 @@ ${content}
         return typeof schema === 'string' ? schema : JSON.stringify(schema, null, 2);
     };
 
-    const UI_TEMPLATE_UPDATES_PATTERN = /<ui_template_updates\b[^>]*>([\s\S]*?)<\/ui_template_updates>|(\{\s*"updates"\s*:[\s\S]*$)/i;
     const findUiTemplateUpdateBlock = (text) => {
         const source = String(text || '');
-        const taggedCandidate = window.RPHubCardUtils.findLastUnprotectedMatch(source, /<ui_template_updates\b[^>]*>/i);
+        const taggedCandidate = window.RPHubCardUtils.findLastUnprotectedMatch(
+            source, /<ui_template_updates\b[^>]*>/i, { includeUiTemplateUpdates: true }
+        );
         const taggedTail = taggedCandidate ? source.slice(taggedCandidate.index).trimEnd() : '';
         const tagged = taggedTail.match(/^<ui_template_updates\b[^>]*>([\s\S]*?)(?:<\/ui_template_updates>)?$/i);
         if (tagged) {
-            const result = [taggedTail, tagged[1], undefined];
+            const result = [taggedTail, tagged[1]];
             result.index = taggedCandidate.index;
             return result;
         }
-        const candidate = window.RPHubCardUtils.findLastUnprotectedMatch(source, /\{\s*"updates"\s*:/i);
-        if (!candidate) return null;
-        const tail = source.slice(candidate.index).trimEnd();
-        if (!/^\{\s*"updates"\s*:/i.test(tail)) return null;
-        const result = [tail, undefined, tail];
-        result.index = candidate.index;
-        return result;
+        return null;
     };
 
     const stripUiTemplateUpdateBlock = (text) => {
@@ -1660,223 +1662,125 @@ ${content}
         return match ? source.slice(0, match.index).trimEnd() : source;
     };
 
-    const createDetailedJsonSyntaxError = (error, content) => {
-        const positionMatch = String(error?.message || '').match(/position\s+(\d+)/i);
-        if (!positionMatch) return error;
-        const position = Math.min(Number(positionMatch[1]), content.length);
-        const beforePosition = content.slice(0, position);
-        const line = beforePosition.split('\n').length;
-        const lineStart = beforePosition.lastIndexOf('\n') + 1;
-        const column = position - lineStart + 1;
-        const contextStart = Math.max(0, position - 36);
-        const contextEnd = Math.min(content.length, position + 37);
-        const before = content.slice(contextStart, position).replace(/\r?\n/g, '↵');
-        const current = content.slice(position, position + 1) || '文本结尾';
-        const after = content.slice(position + 1, contextEnd).replace(/\r?\n/g, '↵');
-        const message = String(error.message)
-            .replace(/\s+at position\s+\d+(?:\s+\(line\s+\d+\s+column\s+\d+\))?$/i, '');
-        const hint = current === ']' && /Expected ',' or '}' after property value/i.test(message)
-            ? '；此处在数组结束前缺少“}”，需要先关闭当前这一项对象'
-            : current === '}' && /Expected ',' or ']' after array element/i.test(message)
-                ? '；此处在数组项结束后多写了一个“}”'
-                : '';
-        const detailedError = new SyntaxError(
-            `${message}${hint}；精确位置：第 ${line} 行第 ${column} 列（索引 ${position}）；附近：${before}⟦${current}⟧${after}`
-        );
-        detailedError.jsonSource = content;
-        detailedError.jsonPosition = position;
-        detailedError.jsonLine = line;
-        detailedError.jsonColumn = column;
-        return detailedError;
-    };
-
-    const parseUiTemplateUpdateJson = (rawContent) => {
-        const normalizedContent = String(rawContent || '')
-            .replace(/^<ui_template_updates\b[^>]*>\s*/i, '')
-            .replace(/\s*<\/ui_template_updates>$/i, '')
+    const parseUiTemplateUpdates = (rawContent, expectedTemplates = []) => {
+        const source = String(rawContent || '').trim()
             .replace(/^```(?:json)?\s*/i, '')
-            .replace(/```\s*$/i, '')
+            .replace(/\s*```$/i, '')
             .trim();
+        if (!source) return { updates: [] };
+        let parsed;
         try {
-            return JSON.parse(normalizedContent);
-        } catch (primaryError) {
-            throw createDetailedJsonSyntaxError(primaryError, normalizedContent);
+            parsed = JSON.parse(source);
+        } catch (error) {
+            const parseError = new SyntaxError(`JSON变量块格式错误：${error.message}`);
+            parseError.jsonSource = source;
+            throw parseError;
         }
+        if (expectedTemplates.length > 1 && Array.isArray(parsed)
+            && parsed.every(item => item && typeof item === 'object' && !Array.isArray(item)
+                && typeof item.id === 'string' && Object.prototype.hasOwnProperty.call(item, 'variables'))) {
+            return { updates: parsed.map(item => ({ id: item.id.trim(), variables: item.variables })) };
+        }
+        return { updates: [{ id: '', variables: parsed }] };
     };
 
     const normalizeUiTemplateUpdateList = (parsed, expectedTemplates = []) => {
         const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+        const isUnsafeKey = key => ['__proto__', 'prototype', 'constructor'].includes(String(key));
+        const valueType = value => Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
+        const DYNAMIC_ANY = Symbol('dynamic-any');
         const issues = [];
-        let updates = [];
-        let inferredListField = '';
-
-        if (!isRecord(parsed)) {
-            issues.push('变量块不是有效的JSON对象');
-        } else if (Array.isArray(parsed.updates)) {
-            updates = parsed.updates;
-        } else {
-            const hasUpdatesField = Object.prototype.hasOwnProperty.call(parsed, 'updates');
-            if (hasUpdatesField) issues.push('外层“updates”不是数组');
-            const arrayFields = Object.entries(parsed).filter(([, value]) => Array.isArray(value));
-            if (arrayFields.length === 1) {
-                inferredListField = arrayFields[0][0];
-                updates = arrayFields[0][1];
-                issues.push(`外层字段“${inferredListField}”无效，应为“updates”`);
-            } else if (!hasUpdatesField) {
-                issues.push('缺少外层“updates”数组');
-            }
-        }
-        if (isRecord(parsed)) {
-            const unknownFields = Object.keys(parsed).filter(key => key !== 'updates' && key !== inferredListField);
-            if (unknownFields.length) issues.push(`外层包含未定义字段：${unknownFields.join('、')}`);
-        }
-
+        const updates = isRecord(parsed) && Array.isArray(parsed.updates) ? parsed.updates : [];
+        if (!isRecord(parsed) || !Array.isArray(parsed.updates)) issues.push('变量块缺少有效的JSON更新内容');
+        if (!issues.length && !updates.length) return updates;
         const templatesById = new Map(expectedTemplates.map(template => [String(template.id), template]));
         const receivedById = new Map();
         updates.forEach((update, index) => {
-            const location = `第 ${index + 1} 项`;
-            if (!isRecord(update)) {
-                issues.push(`${location}不是有效对象`);
-                return;
-            }
-
-            let variables = update.variables;
-            let inferredVariablesField = '';
-            if (!Object.prototype.hasOwnProperty.call(update, 'variables')) {
-                const inferred = Object.entries(update).filter(([key, value]) => (
-                    !['id', 'name', 'reason'].includes(key) && value !== null && typeof value === 'object'
-                ));
-                if (inferred.length === 1) {
-                    inferredVariablesField = inferred[0][0];
-                    variables = inferred[0][1];
-                    issues.push(`${location}字段“${inferredVariablesField}”无效，应为“variables”`);
-                } else {
-                    issues.push(`${location}缺少“variables”`);
-                }
-            } else if (variables === null || typeof variables !== 'object') {
-                issues.push(`${location}的“variables”必须是对象或数组`);
-            }
-            const unknownFields = Object.keys(update).filter(key => (
-                !['id', 'name', 'variables', 'reason'].includes(key) && key !== inferredVariablesField
-            ));
-            if (unknownFields.length) issues.push(`${location}包含未定义字段：${unknownFields.join('、')}`);
-
-            const id = typeof update.id === 'string' ? update.id.trim() : '';
-            if (!id) {
-                issues.push(`${location}缺少有效模板ID`);
-                return;
-            }
-            if (!templatesById.has(id)) {
-                const validIds = [...templatesById.keys()];
-                const expected = validIds.length === 1
-                    ? `，当前模板ID应为“${validIds[0]}”`
-                    : `，可用模板ID：${validIds.map(value => `“${value}”`).join('、')}`;
-                issues.push(`${location}使用了未知模板ID“${id}”${expected}`);
-                return;
-            }
+            const location = '第 ' + (index + 1) + ' 项';
+            if (!isRecord(update)) { issues.push(location + '不是有效对象'); return; }
+            if (!Object.prototype.hasOwnProperty.call(update, 'variables')) { issues.push(location + '缺少 variables 字段'); return; }
+            if (update.variables === null || typeof update.variables !== 'object') { issues.push(location + '的 variables 必须是对象或数组'); return; }
+            const unknownFields = Object.keys(update).filter(key => !['id', 'variables'].includes(key));
+            if (unknownFields.length) issues.push(location + '包含未定义字段：' + unknownFields.join('、'));
+            const explicitId = typeof update.id === 'string' ? update.id.trim() : '';
+            const id = explicitId || (expectedTemplates.length === 1 ? String(expectedTemplates[0].id) : '');
+            if (!id) { issues.push(expectedTemplates.length > 1 ? location + '缺少模板ID；多模板必须使用JSON数组成员的 id 字段' : location + '缺少有效模板ID'); return; }
+            if (!templatesById.has(id)) { issues.push(location + '使用了未知模板ID“' + id + '”'); return; }
             if (!receivedById.has(id)) receivedById.set(id, []);
-            receivedById.get(id).push({ variables });
+            receivedById.get(id).push({ variables: update.variables });
         });
-
+        const dynamicSampleFor = (expected, path, schemaText) => {
+            if (!isRecord(expected) || !path) return undefined;
+            const escaped = String(path).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+            const hasIdMarker = String(schemaText || '').includes(path + '.{id}')
+                || String(schemaText || '').includes(path + '{id}');
+            const allowsNewKey = new RegExp('新增(?:键|\\s*id)[^\\n]*' + escaped, 'i').test(schemaText);
+            if (!hasIdMarker && !allowsNewKey) return undefined;
+            return Object.values(expected)[0] ?? DYNAMIC_ANY;
+        };
+        const validateValue = (expected, actual, path, schemaText, unknownNames, invalidNames) => {
+            if (isUnsafeKey(String(path).split('.').pop())) { unknownNames.push(path); return; }
+            if (Array.isArray(actual)) {
+                if (!Array.isArray(expected)) { invalidNames.push(path || '$root'); return; }
+                const sample = expected[0];
+                if (sample !== undefined) actual.forEach((item, index) => validateValue(sample, item, (path || '$root') + '[' + index + ']', schemaText, unknownNames, invalidNames));
+                return;
+            }
+            if (isRecord(actual)) {
+                if (!isRecord(expected)) { invalidNames.push(path || '$root'); return; }
+                Object.entries(actual).forEach(([key, value]) => {
+                    if (isUnsafeKey(key)) { unknownNames.push(path ? path + '.' + key : key); return; }
+                    const childPath = path ? path + '.' + key : key;
+                    if (Object.prototype.hasOwnProperty.call(expected, key)) validateValue(expected[key], value, childPath, schemaText, unknownNames, invalidNames);
+                    else {
+                        const dynamic = dynamicSampleFor(expected, path, schemaText);
+                        if (dynamic === undefined) unknownNames.push(childPath);
+                        else if (dynamic !== DYNAMIC_ANY) validateValue(dynamic, value, childPath, schemaText, unknownNames, invalidNames);
+                    }
+                });
+                return;
+            }
+            if (expected !== undefined && expected !== null && valueType(expected) !== valueType(actual)) invalidNames.push(path || '$root');
+        };
         receivedById.forEach((received, id) => {
             const template = templatesById.get(id);
             const label = template.name || id;
-            const currentVariables = template.variableState || {};
-            const schemaText = stringifyUiSchema(template.variableSchema);
-            if (received.length > 1) issues.push(`模板“${label}”重复输出了 ${received.length} 次`);
-
-            const variables = received[0].variables;
-            if (Array.isArray(currentVariables)) {
-                if (!Array.isArray(variables)) issues.push(`模板“${label}”必须完整输出数组变量`);
-                return;
-            }
-            if (!isRecord(variables)) {
-                issues.push(`模板“${label}”的变量不是有效对象`);
-                return;
-            }
+            if (received.length > 1) issues.push('模板“' + label + '”重复输出了 ' + received.length + ' 次');
             const unknownNames = [];
             const invalidNames = [];
-            const dynamicRoots = new Set();
-            schemaText.split(/\r?\n/).filter(line => /新增键|新增\s*id|只增添\s*\/\s*修改/.test(line)).forEach(line => {
-                Object.keys(currentVariables).forEach(key => {
-                    if (line.includes(key)) dynamicRoots.add(key);
-                });
-            });
-            const dynamicPrefixes = [...schemaText.matchAll(/([A-Za-z][A-Za-z0-9_]*?)\{id\}/g)]
-                .map(match => match[1]);
-            const socialNodes = Array.isArray(variables.social_nodes) ? variables.social_nodes : currentVariables.social_nodes;
-            const socialIds = new Set((Array.isArray(socialNodes) ? socialNodes : []).map(node => String(node?.id || '')));
-            const findExpectedPath = (expected, path) => {
-                let current = expected;
-                for (const part of splitUiTemplatePath(path)) {
-                    if ((!isRecord(current) && !Array.isArray(current)) || !Object.prototype.hasOwnProperty.call(current, part)) {
-                        return { found: false, value: undefined };
-                    }
-                    current = current[part];
-                }
-                return { found: true, value: current };
-            };
-            const findDynamicExpected = (path) => {
-                const parts = splitUiTemplatePath(path);
-                const root = parts[0];
-                let sample;
-                if (parts.length > 1 && dynamicRoots.has(root) && isRecord(currentVariables[root])) {
-                    sample = Object.values(currentVariables[root])[0];
-                } else if (parts.length > 0) {
-                    const prefix = dynamicPrefixes.find(value => root.startsWith(value));
-                    const id = prefix ? root.slice(prefix.length) : '';
-                    if (!prefix || !id || !socialIds.has(id)) return { found: false };
-                    sample = Object.entries(currentVariables).find(([key]) => key.startsWith(prefix))?.[1];
-                } else {
-                    return { found: false };
-                }
-                if (parts.length <= (dynamicRoots.has(root) ? 2 : 1)) return { found: true, value: sample };
-                return findExpectedPath(sample, parts.slice(dynamicRoots.has(root) ? 2 : 1).join('.'));
-            };
-            const inspectVariables = (expected, actual, prefix = '') => {
-                Object.keys(actual).forEach(name => {
-                    const path = prefix ? `${prefix}.${name}` : name;
-                    const resolved = findExpectedPath(expected, name);
-                    if (!resolved.found) {
-                        const dynamic = findDynamicExpected(path);
-                        if (!dynamic.found) {
-                            unknownNames.push(path);
-                        } else if (isRecord(actual[name]) && isRecord(dynamic.value)) {
-                            inspectVariables(dynamic.value, actual[name], path);
-                        } else if ((Array.isArray(dynamic.value) && !Array.isArray(actual[name]))
-                            || (isRecord(dynamic.value) && !isRecord(actual[name]))) {
-                            invalidNames.push(path);
-                        }
-                    } else if (isRecord(actual[name])) {
-                        if (isRecord(resolved.value)) inspectVariables(resolved.value, actual[name], path);
-                        else invalidNames.push(path);
-                    } else if ((Array.isArray(resolved.value) && !Array.isArray(actual[name]))
-                        || (isRecord(resolved.value) && !isRecord(actual[name]))) {
-                        invalidNames.push(path);
-                    }
-                });
-            };
-            inspectVariables(currentVariables, variables);
-            if (unknownNames.length) issues.push(`模板“${label}”输出了未定义变量：${unknownNames.join('、')}`);
-            if (invalidNames.length) issues.push(`模板“${label}”变量结构错误：${invalidNames.join('、')}`);
+            validateValue(template.variableState || {}, received[0].variables, '', stringifyUiSchema(template.variableSchema), unknownNames, invalidNames);
+            if (unknownNames.length) issues.push('模板“' + label + '”输出了未定义变量：' + unknownNames.join('、'));
+            if (invalidNames.length) issues.push('模板“' + label + '”变量类型或结构错误：' + invalidNames.join('、'));
         });
-
         if (issues.length) throw new Error(issues.join('；'));
         return updates;
     };
-
-    const applyUiTemplateUpdateListToTemplate = (template, updates, { model = '', turn = null, source = 'ai', matchName = true } = {}) => {
+    const applyUiTemplateUpdateListToTemplate = (template, updates, { model = '', turn = null, source = 'ai' } = {}) => {
         let fieldCount = 0;
         let changed = false;
         updates.forEach(update => {
             if (!template || !update || typeof update !== 'object') return;
             if (update.id && update.id !== template.id) return;
-            if (matchName && update.name && update.name !== template.name) return;
             if (update.variables === null || typeof update.variables !== 'object') return;
             const changes = {};
-            const variableEntries = Array.isArray(update.variables)
-                ? [['$root', update.variables]]
-                : Object.entries(update.variables);
+            const variableEntries = [];
+            const collectEntries = (value, path = '') => {
+                if (Array.isArray(value) || value === null || typeof value !== 'object') {
+                    if (path) variableEntries.push([path, value]);
+                    return;
+                }
+                const entries = Object.entries(value);
+                if (!entries.length && path) variableEntries.push([path, value]);
+                entries.forEach(([key, child]) => {
+                    const childPath = path ? `${path}.${key}` : key;
+                    const current = getUiTemplateValue(template.variableState || {}, childPath);
+                    if (child && typeof child === 'object' && !Array.isArray(child)
+                        && current && typeof current === 'object' && !Array.isArray(current)) collectEntries(child, childPath);
+                    else variableEntries.push([childPath, child]);
+                });
+            };
+            if (Array.isArray(update.variables)) variableEntries.push(['$root', update.variables]);
+            else collectEntries(update.variables);
             variableEntries.forEach(([key, value]) => {
                 const oldValue = key === '$root'
                     ? template.variableState
@@ -1894,8 +1798,7 @@ ${content}
                     source,
                     model,
                     turn,
-                    changes,
-                    reason: update.reason || ''
+                    changes
                 });
                 template.changeLog = template.changeLog.slice(0, 50);
                 fieldCount += Object.keys(changes).length;
@@ -1906,7 +1809,6 @@ ${content}
     };
 
     window.RPHubUiTemplateUtils = {
-        UI_TEMPLATE_UPDATES_PATTERN,
         applyUiTemplateUpdateListToTemplate,
         buildExecutableHtmlDocument,
         cloneUiObject,
@@ -1917,7 +1819,7 @@ ${content}
         inferInitialUiTemplateState,
         normalizeUiTemplate,
         normalizeUiTemplateUpdateList,
-        parseUiTemplateUpdateJson,
+        parseUiTemplateUpdates,
         renderUiTemplateHtml,
         renderUiTemplateString,
         sanitizeUiTemplateImportEntry,

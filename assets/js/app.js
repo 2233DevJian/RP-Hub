@@ -2,7 +2,8 @@ const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, watch, n
 const { useStorageManagement, useTokenUsage } = window.RPHubComposables;
 const { createMessageRenderer } = window.RPHubMessageRenderer;
 const { AppSidebar } = window.RPHubLayoutComponents;
-const { requestChatCompletion } = window.RPHubApiClient;
+const { requestChatCompletion, requestJson } = window.RPHubApiClient;
+const { buildApiEndpoint } = window.RPHubApiUtils;
 const {
     ActionConfirmModal,
     ActiveToolEditorModal,
@@ -37,10 +38,9 @@ const {
 const {
     compressImage,
     defaultAvatar,
-    extractApiErrorMessage,
-    extractApiUsageFromText,
     generateUUID,
     getApiUsagePayload,
+    getImageTagRegex,
     normalizeApiUsage,
     parseCot,
     stringifyErrorDetail
@@ -55,7 +55,6 @@ const {
     getVectorMemoryFingerprint,
     getVectorMemoryText,
     getVectorLexicalMatch,
-    hasVectorEmbedding,
     isEmbeddingLike,
     isEnabledVectorMemory,
     isVectorMemory,
@@ -109,7 +108,7 @@ const {
     inferInitialUiTemplateState,
     normalizeUiTemplate,
     normalizeUiTemplateUpdateList,
-    parseUiTemplateUpdateJson,
+    parseUiTemplateUpdates,
     renderUiTemplateHtml,
     sanitizeUiTemplateImportEntry,
     setUiTemplateValue,
@@ -134,10 +133,7 @@ const {
     setStoredValue,
     unwrapForStorage
 } = window.RPHubStorage;
-const {
-    prompts: BUILTIN_PROMPTS,
-    summaryLengthRequirements: SUMMARY_LENGTH_REQUIREMENTS
-} = window.RPHubBuiltinContent;
+const { prompts: BUILTIN_PROMPTS } = window.RPHubBuiltinContent;
 const {
     activeTools: activeToolConfig,
     apiProviderOptions,
@@ -162,6 +158,23 @@ marked.use({
     }
 });
 
+const RollingText = {
+    props: { value: { type: [String, Number], default: '' } },
+    setup(props) {
+        const text = computed(() => String(props.value ?? ''));
+        const characters = computed(() => Array.from(text.value));
+        return { characters, text };
+    },
+    template: `
+        <span class="inline-flex" :aria-label="text">
+            <span v-for="(character, index) in characters" :key="index" class="inline-grid overflow-hidden">
+                <transition name="usage-roll" appear>
+                    <span :key="character" class="col-start-1 row-start-1" aria-hidden="true">{{ character }}</span>
+                </transition>
+            </span>
+        </span>`
+};
+
 const app = createApp({
     components: {
         ActionConfirmModal,
@@ -182,6 +195,7 @@ const app = createApp({
         PresetEditorModal,
         RegexEditorModal,
         RetryConfirmModal,
+        RollingText,
         SettingsHelp,
         SettingsPageHeader,
         StatusNoticeModal,
@@ -209,7 +223,6 @@ const app = createApp({
             uiTemplatePlacements: uiTemplatePlacementOptions,
             worldInfoPositions: worldInfoPositionOptions
         } = uiOptions;
-        const ACTIVE_TOOL_VECTOR_TYPE = activeToolConfig.types.vector;
         const ACTIVE_TOOL_KEYWORD_TYPE = activeToolConfig.types.keyword;
         const ACTIVE_TOOL_WEB_TYPE = activeToolConfig.types.web;
         const ACTIVE_TOOL_MIN_RESULT_COUNT = activeToolConfig.resultCount.min;
@@ -226,7 +239,6 @@ const app = createApp({
         const ACTIVE_TOOL_TAVILY_EXTRACT_ENDPOINT = activeToolConfig.tavily.extractEndpoint;
         const ACTIVE_TOOL_TAVILY_SEARCH_DEPTH = activeToolConfig.tavily.searchDepth;
         const ACTIVE_TOOL_TAVILY_EXTRACT_MAX_URLS = ACTIVE_TOOL_DEFAULT_RESULT_COUNT;
-        const createDefaultActiveTool = () => ({ ...activeToolConfig.defaults[0] });
         const getDefaultActiveToolDefinitions = () => activeToolConfig.defaults.map(tool => ({ ...tool }));
 
         // --- State ---
@@ -354,6 +366,7 @@ const app = createApp({
         let activeToolQueueAbortController = null;
         const abortController = ref(null);
         const userInput = ref('');
+        const pendingCardInteraction = ref('');
         const pendingChatImages = ref([]);
         const pendingChatImageReadCount = ref(0);
         let chatImageSelectionEpoch = 0;
@@ -596,13 +609,16 @@ const app = createApp({
             contextSize: MAX_CONTEXT_SIZE,
             temperature: 1.0,
             reasoningEffort: '',
-            autoFetchModels: true,
             stream: true,
             activeToolAggressiveness: 'adaptive',
             activeToolAggressivenessVersion: 2,
 
             useCharacterBackground: true,
             immersiveMode: false,
+            showLatestUsageBar: false,
+            preventTruncation: false,
+            truncationMaxAttempts: 5,
+            styleFilterEnabled: true,
             uiTemplateEnabled: false,
             uiTemplateModel: '',
             uiTemplateAnalysisDepth: 4,
@@ -814,6 +830,8 @@ const app = createApp({
         });
 
         const currentModelMode = ref('quality');
+        const isGeminiModel = computed(() => /gemini/i.test(String(settings.model || '')));
+        const isTruncationEnabled = computed(() => isGeminiModel.value && settings.preventTruncation);
         const modelMode = computed({
             get: () => {
                 return currentModelMode.value;
@@ -942,15 +960,46 @@ const app = createApp({
             if (role === 'assistant') return 'bg-purple-100 text-purple-700 border-purple-200';
             return 'bg-red-100 text-red-700 border-red-200';
         };
-        const blockedStyleSentencePattern = /[^。！？!?\n]*(?:不容置疑|(?:不易|难以)(?:察觉|觉察)|(?:微|几)不可察|一抹|弧度|生理性|像(?:是)?[^。！？!?\n]*?[，,]\s*又像(?:是)?|不是[^。！？!?\n]*?(?:而是|[，,]\s*(?:是|(?:更|倒|反倒)?像是)))[^。！？!?\n]*(?:[。！？!?]+[”’」』】）)]*(?:\*\*|__)?)?/g;
+        const blockedStyleSentencePattern = /[^。！？!?\n]*(?:不容置疑|(?:不易|难以)(?:察觉|觉察)|(?:微|几)不可察|一抹|弧度|生理性|微微泛|因为用力|像在|风箱|手术刀|上扬|带着一种|语气很平|声音很平|(?:指尖|指节|指关节)[^。！？!?\n]*(?:发白|泛白)|像(?:是)?[^。！？!?\n]*?[，,]\s*又像(?:是)?|不是[^。！？!?\n]*?(?:而是|就是|[，,]\s*(?:是|(?:更|倒|反倒)?像是)))[^。！？!?\n]*(?:[。！？!?]+[”’」』】）)]*(?:\*\*|__)?)?/g;
+        const standaloneWordCountSentencePattern = /(^|[。！？!?\n]+[”’」』】）)]*)[ \t]*(?:\*\*|__)?(?:\d+|[零〇一二两三四五六七八九十百千万]+)个字[^。！？!?\n]*(?:[。！？!?]+[”’」』】）)]*(?:\*\*|__)?)?/gm;
         const paleFingerClausePattern = /(?:^|[，,；;])[^，,。！？!?；;\n]*(?:指尖|指节|指关节)[^，,。！？!?；;\n]*(?:发白|泛白)[^，,。！？!?；;\n]*(?=$|[，,。！？!?；;\n])/gm;
+        const blockedStyleClausePattern = /(?:^|[，,；;])[^，,。！？!?；;\n*_]*(?:微微泛|因为用力|像在|风箱|手术刀|上扬|带着一种)[^，,。！？!?；;\n*_]*(?=(?:\*\*|__)?[ \t]*(?:$|[，,。！？!?；;\n]))/gm;
         const blockedStyleWordPattern = /极其/g;
         const quotedDialoguePattern = /(“[\s\S]*?”|『[\s\S]*?』|"[\s\S]*?")/g;
         const standaloneRenderedContentPattern = /^(?:\s|<!--[\s\S]*?-->)*(?:```|<!doctype\b|<\?xml\b|<html\b|<(?:head|body|style|script|template|svg|canvas|iframe|div|section|article|aside|header|footer|main|nav|form|table|ul|ol|pre|p|img)\b)/i;
         const isStandaloneRenderedContent = text => standaloneRenderedContentPattern.test(String(text || ''));
         const loggedBlockedStyleFragments = new Set();
-        const filterBlockedStyleText = (text, { log = false } = {}) => {
+        const openStyleFilterMessageKey = ref('');
+        const getStyleFilterMessageKey = (message, index) => String(message?.id || `message-${index}`);
+        const isStyleFilterDetailsOpen = (message, index) => (
+            openStyleFilterMessageKey.value === getStyleFilterMessageKey(message, index)
+        );
+        const toggleStyleFilterDetails = (message, index) => {
+            const key = getStyleFilterMessageKey(message, index);
+            openStyleFilterMessageKey.value = openStyleFilterMessageKey.value === key ? '' : key;
+        };
+        const normalizeStyleFilterHit = fragment => String(fragment || '')
+            .trim()
+            .replace(/^[，,；;]\s*/, '')
+            .replace(/^(?:\*\*|__)/, '')
+            .replace(/(?:\*\*|__)$/, '')
+            .trim();
+        const styleFilterHighlightPattern = /(?:不容置疑|(?:不易|难以)(?:察觉|觉察)|(?:微|几)不可察|一抹|弧度|生理性|微微泛|因为用力|像在|风箱|手术刀|上扬|带着一种|语气很平|声音很平|(?:\d+|[零〇一二两三四五六七八九十百千万]+)个字|指尖|指节|指关节|发白|泛白|不是|而是|就是|又像(?:是)?|(?:更|倒|反倒)?像是|极其)/g;
+        const getStyleFilterHitSegments = fragment => {
+            const text = String(fragment || '');
+            const segments = [];
+            let lastIndex = 0;
+            for (const match of text.matchAll(styleFilterHighlightPattern)) {
+                if (match.index > lastIndex) segments.push({ text: text.slice(lastIndex, match.index), matched: false });
+                segments.push({ text: match[0], matched: true });
+                lastIndex = match.index + match[0].length;
+            }
+            if (lastIndex < text.length) segments.push({ text: text.slice(lastIndex), matched: false });
+            return segments.length ? segments : [{ text, matched: false }];
+        };
+        const filterBlockedStyleText = (text, { log = false, collect = null } = {}) => {
             const source = String(text || '');
+            if (!settings.styleFilterEnabled) return source;
             if (isStandaloneRenderedContent(source)) return source;
             const removedFragments = [];
             const updateBlock = findUiTemplateUpdateBlock(source);
@@ -958,8 +1007,13 @@ const app = createApp({
             const filtered = cardUtils.transformUnprotectedText(source.slice(0, filterEnd), part => part
                 .split(quotedDialoguePattern)
                 .map((fragment, index) => index % 2 ? fragment : fragment
+                    .replace(standaloneWordCountSentencePattern, (match, prefix = '') => {
+                        removedFragments.push(match.slice(prefix.length).trim());
+                        return prefix;
+                    })
                     .replace(blockedStyleSentencePattern, match => { removedFragments.push(match.trim()); return ''; })
                     .replace(paleFingerClausePattern, match => { removedFragments.push(match.trim()); return ''; })
+                    .replace(blockedStyleClausePattern, match => { removedFragments.push(match.trim()); return ''; })
                     .replace(blockedStyleWordPattern, match => { removedFragments.push(match); return ''; })
                     .replace(/^[ \t]*[，,；;]+/gm, '')
                     .replace(/[，,；;]{2,}/g, marks => marks.at(-1))
@@ -967,6 +1021,9 @@ const app = createApp({
                     .replace(/[ \t]+\n/g, '\n')
                     .replace(/\n{3,}/g, '\n\n'))
                 .join(''));
+            if (Array.isArray(collect)) {
+                collect.push(...removedFragments.map(normalizeStyleFilterHit).filter(Boolean));
+            }
             if (log) {
                 const newFragments = removedFragments.filter(fragment => fragment && !loggedBlockedStyleFragments.has(fragment));
                 newFragments.forEach(fragment => loggedBlockedStyleFragments.add(fragment));
@@ -1035,9 +1092,7 @@ const app = createApp({
         const MEMORY_VECTOR_MIN_TOP_K = 10;
         const MEMORY_VECTOR_MAX_TOP_K = 20;
         const MEMORY_VECTOR_DEFAULT_TOP_K = 10;
-        const MEMORY_VECTOR_MIN_SIMILARITY = 40;
-        const MEMORY_VECTOR_MAX_SIMILARITY = 65;
-        const MEMORY_VECTOR_DEFAULT_SIMILARITY = 50;
+        const MEMORY_VECTOR_SIMILARITY_THRESHOLD = 45;
         const MEMORY_VECTOR_DEFAULT_DEPTH = 1;
         const CLASSIC_MEMORY_MIN_CONCURRENCY = 1;
         const CLASSIC_MEMORY_MAX_CONCURRENCY = 10;
@@ -1052,7 +1107,6 @@ const app = createApp({
         const SUMMARY_KEEP_FLOORS_MIN = 10;
         const SUMMARY_KEEP_FLOORS_MAX = 40;
         const SUMMARY_KEEP_FLOORS_DEFAULT = 20;
-        const SUMMARY_LEVEL_DEFAULT = 'balanced';
         const LIST_PAGE_SIZE = 10;
         const memories = ref([]);
         const classicMemories = ref([]);
@@ -1063,11 +1117,8 @@ const app = createApp({
             embeddingModel: '',
             classicModel: '',
             vectorTopK: MEMORY_VECTOR_DEFAULT_TOP_K,
-            similarityThreshold: MEMORY_VECTOR_DEFAULT_SIMILARITY,
-            defaultDepth: MEMORY_VECTOR_DEFAULT_DEPTH,
             vectorKeepFloors: VECTOR_KEEP_FLOORS_DEFAULT,
             summaryKeepFloors: SUMMARY_KEEP_FLOORS_DEFAULT,
-            summaryLevel: SUMMARY_LEVEL_DEFAULT,
             classicConcurrency: CLASSIC_MEMORY_DEFAULT_CONCURRENCY
         });
         const isBatchExtracting = ref(false);
@@ -1132,7 +1183,7 @@ const app = createApp({
             if (!memorySettings.classicModel && memorySettings.model) {
                 memorySettings.classicModel = String(memorySettings.model).trim();
             }
-            ['model', 'autoExtract', 'keepFloors', `re${'rankEnabled'}`, `re${'rankModel'}`].forEach(key => {
+            ['model', 'autoExtract', 'keepFloors', 'similarityThreshold', 'summaryLevel', 'defaultDepth', `re${'rankEnabled'}`, `re${'rankModel'}`].forEach(key => {
                 delete memorySettings[key];
             });
             memorySettings.mode = memorySettings.mode === MEMORY_MODE_CLASSIC
@@ -1153,19 +1204,11 @@ const app = createApp({
                 SUMMARY_KEEP_FLOORS_MAX,
                 SUMMARY_KEEP_FLOORS_DEFAULT
             );
-            if (!SUMMARY_LENGTH_REQUIREMENTS[memorySettings.summaryLevel]) {
-                memorySettings.summaryLevel = SUMMARY_LEVEL_DEFAULT;
-            }
             memorySettings.classicConcurrency = normalizeClassicMemoryConcurrency(memorySettings.classicConcurrency);
             const vectorTopK = Number(memorySettings.vectorTopK);
             memorySettings.vectorTopK = Number.isFinite(vectorTopK)
                 ? Math.max(MEMORY_VECTOR_MIN_TOP_K, Math.min(MEMORY_VECTOR_MAX_TOP_K, vectorTopK))
                 : MEMORY_VECTOR_DEFAULT_TOP_K;
-            const similarityThreshold = Number(memorySettings.similarityThreshold);
-            memorySettings.similarityThreshold = Number.isFinite(similarityThreshold)
-                ? Math.max(MEMORY_VECTOR_MIN_SIMILARITY, Math.min(MEMORY_VECTOR_MAX_SIMILARITY, Math.round(similarityThreshold)))
-                : MEMORY_VECTOR_DEFAULT_SIMILARITY;
-            memorySettings.defaultDepth = MEMORY_VECTOR_DEFAULT_DEPTH;
         };
 
         const normalizeActiveToolCallName = (value) => {
@@ -1175,7 +1218,7 @@ const app = createApp({
             return source
                 .replace(/[<>：:]/g, '')
                 .replace(/\s+/g, '_')
-                .trim() || 'tool_memory';
+                .trim() || 'tool_grep';
         };
 
         const normalizeActiveToolBaseCallName = (value) => normalizeActiveToolCallName(value)
@@ -1187,21 +1230,7 @@ const app = createApp({
 
         const normalizeActiveTool = (tool = {}) => {
             const resultCount = Number(tool.resultCount);
-            const rawCallName = normalizeActiveToolBaseCallName(tool.callName || tool.callPattern || 'tool_memory');
-            const removedWorldToolNames = [
-                'tool_world',
-                'tool_world_add',
-                'tool_world_cover',
-                'tool_world_list',
-                'tool_world_read',
-                'tool_world_edit'
-            ];
-            const isRemovedWorldTool = removedWorldToolNames.includes(rawCallName)
-                || ['world_info', 'world_info_list', 'world_info_read', 'world_info_edit'].includes(tool.type)
-                || removedWorldToolNames.includes(tool.id);
-            if (isRemovedWorldTool) {
-                return null;
-            }
+            const rawCallName = normalizeActiveToolBaseCallName(tool.callName || tool.callPattern || 'tool_grep');
             const isLegacyWebTool = rawCallName === 'tool_web'
                 || ['web_search', 'tavily', 'tavily_search'].includes(tool.type)
                 || ['tool_web', 'tool_web_add', 'tool_web_cover'].includes(tool.id)
@@ -1209,38 +1238,32 @@ const app = createApp({
             const callName = isLegacyWebTool ? 'tool_web' : rawCallName;
             const defaultTool = getDefaultActiveToolDefinitions()
                 .find(item => item.id === (isLegacyWebTool ? 'tool_web' : tool.id) || item.callName === callName);
-            const fallback = defaultTool || createDefaultActiveTool();
-            const normalizedCallName = defaultTool ? defaultTool.callName : callName;
+            if (!defaultTool) return null;
+            const fallback = defaultTool;
+            const normalizedCallName = fallback.callName;
             const resultCountVersion = Number(tool.resultCountVersion) || 1;
-            const isDefaultTool = !!defaultTool;
-            const normalizedType = isDefaultTool ? fallback.type : (tool.type || fallback.type || ACTIVE_TOOL_VECTOR_TYPE);
-            const description = isDefaultTool
-                ? fallback.description
-                : String(tool.description || fallback.description).trim();
+            const normalizedType = fallback.type;
             const countMin = getActiveToolResultCountMin({ type: normalizedType });
             const countMax = getActiveToolResultCountMax({ type: normalizedType });
             let normalizedResultCount = Number.isFinite(resultCount)
                 ? Math.max(countMin, Math.min(countMax, Math.round(resultCount)))
                 : (fallback.resultCount || ACTIVE_TOOL_DEFAULT_RESULT_COUNT);
             if (resultCountVersion < ACTIVE_TOOL_RESULT_COUNT_VERSION
-                && isDefaultTool
                 && normalizedCallName === fallback.callName
                 && normalizedType !== ACTIVE_TOOL_WEB_TYPE
                 && (!Number.isFinite(resultCount) || Math.round(resultCount) <= ACTIVE_TOOL_MIN_RESULT_COUNT || Math.round(resultCount) === 10)) {
                 normalizedResultCount = ACTIVE_TOOL_DEFAULT_RESULT_COUNT;
             }
             const normalized = {
-                id: isDefaultTool ? fallback.id : (tool.id || generateUUID()),
-                name: isDefaultTool ? fallback.name : (String(tool.name || fallback.name).trim() || fallback.name),
+                id: fallback.id,
+                name: fallback.name,
                 enabled: tool.enabled !== false,
                 type: normalizedType,
                 callName: normalizedCallName,
                 resultCount: normalizedResultCount,
                 resultCountVersion: ACTIVE_TOOL_RESULT_COUNT_VERSION,
-                description: description || fallback.description,
-                displayDescription: isDefaultTool
-                    ? fallback.displayDescription
-                    : (String(tool.displayDescription || fallback.displayDescription).trim() || fallback.displayDescription)
+                description: fallback.description,
+                displayDescription: fallback.displayDescription
             };
             if (normalizedType === ACTIVE_TOOL_WEB_TYPE) {
                 normalized.tavilyApiKey = String(tool.tavilyApiKey || tool.apiKey || fallback.tavilyApiKey || '').trim();
@@ -1344,8 +1367,6 @@ const app = createApp({
         const worldInfoKeysText = ref('');
         const editingActiveTool = reactive({ id: undefined, data: {} });
 
-        const sysInstruction = ref('');
-        const showInstructionPanel = ref(false);
         const showContextViewerModal = ref(false);
         const showStoryBranchModal = ref(false);
         const showStoryBranchNameEditor = ref(false);
@@ -1371,6 +1392,8 @@ const app = createApp({
             displayedTokenUsageHistory,
             filteredTokenUsageHistory,
             formatTokenAggregate,
+            formatLatestTokenCount,
+            formatLatestUsageCost,
             formatTokenCount,
             formatTokenUsageTime,
             getTokenUsageTypeLabel,
@@ -1385,7 +1408,8 @@ const app = createApp({
             tokenUsageStats,
             tokenUsageTimeFilter,
             tokenUsageTimeFilterLabel,
-            tokenUsageTimeFilterOptions
+            tokenUsageTimeFilterOptions,
+            latestMainTokenUsage
         } = useTokenUsage({
             pageSize: LIST_PAGE_SIZE,
             cloneForStorage,
@@ -1394,11 +1418,19 @@ const app = createApp({
                 if (!getMainDb()) await initDB();
             },
             generateUUID,
-            getCharacterName: () => currentCharacter.value?.name || '',
+            getApiKey: () => settings.apiKey,
+            getApiUrl: () => settings.apiUrl,
             normalizeApiUsage,
             saveStoredValue: setStoredValue,
             toast: (...args) => showToast(...args)
         });
+        const requestTrackedChatCompletion = (options, type) => {
+            const apiUrl = settings.apiUrl;
+            const request = { url: buildApiEndpoint(apiUrl, 'chat/completions'), apiKey: settings.apiKey, ...options };
+            return requestChatCompletion({ ...request, onUsage: (usage, metrics) => recordApiUsage(usage, {
+                type, model: request.model, apiUrl, apiKey: request.apiKey, ...metrics
+            }) });
+        };
         const {
             cleanupUnusedStorage,
             formatStorageSize,
@@ -1771,6 +1803,7 @@ const app = createApp({
                     const legacySize = String(settings.imageSize || '');
                     settings.imageSize = legacySize.includes('横') ? '横图' : legacySize.includes('方') ? '方图' : '竖图';
                 }
+                settings.imageGenCount = Math.min(8, Math.max(2, Math.round(Number(settings.imageGenCount) || 2)));
                 settings.fontFamilyVersion = 4;
                 applyFontFamily(settings.fontFamily);
                 delete settings.renderLayerLimit;
@@ -2119,8 +2152,8 @@ const app = createApp({
             const cards = [...event.currentTarget.querySelectorAll('.generated-image-card')];
             const imageIndex = cards.indexOf(card);
             const message = chatHistory.value[messageIndex];
-            const mainText = parseCot(message?.content || '').main;
-            const imageMatches = [...mainText.matchAll(/image###([\s\S]*?)###/g)];
+            const sourceText = String(message?.content || '');
+            const imageMatches = cardUtils.findUnprotectedMatches(sourceText, getImageTagRegex(isTruncationEnabled.value));
             const imageMatch = imageMatches[imageIndex];
             if (!message || imageIndex < 0 || !imageMatch) return;
             if (card.classList.contains('is-rerolling')) return;
@@ -2133,11 +2166,9 @@ const app = createApp({
             const swapIndex = Math.floor(Math.random() * (tags.length - 1));
             [tags[swapIndex], tags[swapIndex + 1]] = [tags[swapIndex + 1], tags[swapIndex]];
             const updatedToken = `image###${tags.join(', ')}###`;
-            const updatedMainText = mainText.slice(0, imageMatch.index)
+            const updatedContent = sourceText.slice(0, imageMatch.index)
                 + updatedToken
-                + mainText.slice(imageMatch.index + imageMatch[0].length);
-            const mainStart = message.content.lastIndexOf(mainText);
-            if (mainStart < 0) return;
+                + sourceText.slice(imageMatch.index + imageMatch[0].length);
             const sourceUrl = card.dataset.imageRequest || card.querySelector('img')?.getAttribute('src');
             if (!sourceUrl) return;
             const nextImageUrl = new URL(sourceUrl, window.location.href);
@@ -2158,9 +2189,7 @@ const app = createApp({
                     finishLoading();
                     return;
                 }
-                message.content = originalContent.slice(0, mainStart)
-                    + updatedMainText
-                    + originalContent.slice(mainStart + mainText.length);
+                message.content = updatedContent;
                 message.shouldAnimate = false;
                 scheduleChatHistorySave();
                 showToast('已重新生成图片', 'success');
@@ -2377,6 +2406,9 @@ const app = createApp({
             .sort((a, b) => (Number(b.template.order) || 0) - (Number(a.template.order) || 0) || a.index - b.index)
             .map(item => item.template));
         const activeUiTemplates = computed(() => currentUiTemplates.value.filter(t => t.enabled !== false));
+        const isUiTemplateAnalysisEnabled = () => settings.uiTemplateEnabled
+            && settings.uiTemplateMainModelAnalysis
+            && activeUiTemplates.value.length > 0;
 
         const handleUiTemplateClick = (event) => {
             const trigger = event.target?.closest?.('[data-slash]');
@@ -2402,6 +2434,10 @@ const app = createApp({
         };
 
         const getLastAssistantMessage = () => [...chatHistory.value].reverse().find(msg => msg && msg.role === 'assistant');
+        const summarizeUiTemplateFailure = (reason) => {
+            const text = String(reason || 'UI模板变量校验失败').replace(/\s+/g, ' ').trim();
+            return text.length > 800 ? `${text.slice(0, 797)}...` : text;
+        };
         const buildMainModelUiTemplateUpdatePrompt = () => {
             if (!settings.uiTemplateEnabled || !settings.uiTemplateMainModelAnalysis) return '';
             const templates = activeUiTemplates.value;
@@ -2426,14 +2462,15 @@ const app = createApp({
                 return { handled: false, changed: false };
             }
             delete targetMessage.uiTemplateAnalysisFailure;
-            const recordFailure = (result, reason) => {
+            const recordFailure = (reason) => {
+                const summary = summarizeUiTemplateFailure(reason);
                 targetMessage.uiTemplateAnalysisFailure = {
-                    result,
-                    reason,
+                    summary,
+                    reason: summary,
                     sourceMessageId: targetMessage.id || null
                 };
                 failUiTemplateAnalysis('变量分析失败，下次请求将自动修正', targetMessage.id || null);
-                console.warn('[UI模板] 主模型变量分析失败:', reason, result);
+                console.warn('[UI模板] 主模型变量分析失败:', summary);
                 return { handled: true, changed: false };
             };
             const match = findUiTemplateUpdateBlock(targetMessage.content);
@@ -2441,19 +2478,19 @@ const app = createApp({
                 const missingTemplates = templates
                     .map(template => `模板“${template.name || '未命名'}”（ID：${template.id}）`)
                     .join('；');
-                return recordFailure(`未输出：${missingTemplates}`, `未输出UI模板变量块：${missingTemplates}`);
+                return recordFailure(`未输出UI模板变量块：${missingTemplates}`);
             }
 
             let updates = [];
             try {
-                const updateJson = match[1] || match[2];
-                const parsed = parseUiTemplateUpdateJson(updateJson);
+                const updateContent = match[1];
+                const parsed = parseUiTemplateUpdates(updateContent, templates);
                 updates = normalizeUiTemplateUpdateList(parsed, templates);
             } catch (e) {
                 const reason = e instanceof SyntaxError
-                    ? `JSON格式错误：${e.message}`
+                    ? `变量块格式错误：${e.message}`
                     : e.message;
-                return recordFailure(e?.jsonSource || match[1] || match[2], reason);
+                return recordFailure(reason);
             }
 
             const targetMessageIndex = chatHistory.value.findIndex(msg => msg === targetMessage || (targetMessage.id && msg.id === targetMessage.id));
@@ -2462,9 +2499,7 @@ const app = createApp({
             updates.forEach(update => {
                 const targets = update?.id
                     ? activeUiTemplates.value.filter(template => template.id === update.id)
-                    : (update?.name
-                        ? activeUiTemplates.value.filter(template => template.name === update.name)
-                        : (activeUiTemplates.value.length === 1 ? [activeUiTemplates.value[0]] : []));
+                    : (activeUiTemplates.value.length === 1 ? [activeUiTemplates.value[0]] : []);
                 targets.forEach(template => {
                     const result = applyUiTemplateUpdateListToTemplate(template, [update], { model, turn, source: 'main_model' });
                     if (result.changed) {
@@ -2520,12 +2555,11 @@ const app = createApp({
             const userMessage = chatHistory.value[userIndex];
             const failure = failureMessage.uiTemplateAnalysisFailure;
             const correctionPrompt = BUILTIN_PROMPTS.buildMainModelUiTemplateCorrectionPrompt({
-                failedResult: failure.result,
+                failureSummary: failure.summary || summarizeUiTemplateFailure(failure.reason),
                 failureReason: failure.reason
             });
             userMessage.uiTemplateCorrection = {
-                result: failure.result,
-                reason: failure.reason,
+                summary: failure.summary || summarizeUiTemplateFailure(failure.reason),
                 sourceMessageId: failure.sourceMessageId || failureMessage.id || null
             };
             delete failureMessage.uiTemplateAnalysisFailure;
@@ -3178,7 +3212,7 @@ const app = createApp({
             if (isAutoImageGenEnabled.value) return text; // 生图开启时保留
             return String(text)
                 .replace(/<image\b[^>]*>[\s\S]*?<\/image>/gi, '')
-                .replace(/image###([\s\S]*?)###/gi, '')
+                .replace(getImageTagRegex(isTruncationEnabled.value), '')
                 .replace(/[ \t]+\n/g, '\n')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim();
@@ -3223,6 +3257,7 @@ const app = createApp({
                         : (script.replaceString || '');
 
                     if (!regexPattern) return;
+                    const isImageGenScript = (script.name || script.scriptName) === 'NAI画图正则';
 
                     // 解析 /pattern/flags 格式
                     if (regexPattern.startsWith('/') && regexPattern.lastIndexOf('/') > 0) {
@@ -3236,16 +3271,16 @@ const app = createApp({
                     }
 
                     ({ pattern: regexPattern, flags } = cardUtils.normalizeRegexModifiers(regexPattern, flags));
-
-                    const re = new RegExp(regexPattern, flags);
+                    const re = isImageGenScript
+                        ? getImageTagRegex(isTruncationEnabled.value)
+                        : new RegExp(regexPattern, flags);
 
                     // --- Protection Logic Start ---
                     // 只有当正则不包含 < 或 > 且不包含 markdown 代码块标记 (```) 时，才启用 HTML/代码块保护
                     // 如果正则本身就在匹配代码块（如用户提供的 ```json ...```），则不应进行保护
                     // 增强保护：防止普通正则（通常带g）破坏 iframe 渲染内容（HTML文档、Script/Style块）
                     if (!/[<>]/.test(regexPattern) && !regexPattern.includes('```')) {
-                        // 匹配 完整的 HTML 文档, Script/Style 块, Markdown 代码块, 行内代码, HTML 标签, 或 <cot> 块
-                        // Updated to support <think> and erroneous <cot>...<cot> closing
+                        // 匹配完整的 HTML、脚本、代码块、标签以及 thinking/COT 块
                         result = cardUtils.transformUnprotectedText(
                             result,
                             part => part.replace(re, replacement)
@@ -3273,7 +3308,7 @@ const app = createApp({
             marked,
             DOMPurify
         });
-        watch(() => [settings.disableImages, regexScripts.value, user.name], () => {
+        watch(() => [settings.disableImages, settings.styleFilterEnabled, isTruncationEnabled.value, regexScripts.value, user.name], () => {
             clearMessageRenderCaches();
         }, { deep: true });
 
@@ -3334,12 +3369,6 @@ const app = createApp({
         };
 
         // API & Models
-        const getApiEndpoint = (path) => {
-            const baseUrl = String(settings.apiUrl || '').replace(/\/+$/, '');
-            const apiUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
-            return `${apiUrl}/${String(path || '').replace(/^\/+/, '')}`;
-        };
-
         const fetchModels = async (isManual = false) => {
             const apiKey = String(settings.apiKey || '').trim();
             if (!apiKey) {
@@ -3348,12 +3377,8 @@ const app = createApp({
             }
             try {
                 if (isManual) showToast('正在获取模型列表...', 'info');
-                const url = getApiEndpoint('models');
-                const response = await fetch(url, {
-                    headers: { 'Authorization': `Bearer ${apiKey}` }
-                });
-                if (!response.ok) throw new Error('Failed to fetch models');
-                const data = await response.json();
+                const url = buildApiEndpoint(settings.apiUrl, 'models');
+                const data = await requestJson({ url, apiKey });
                 availableModels.value = data.data || [];
                 if (isManual) showToast(`成功获取 ${availableModels.value.length} 个模型`, 'success');
             } catch (error) {
@@ -3441,11 +3466,8 @@ const app = createApp({
                 return;
             }
             await checkConnectionStatus(apiStatus, apiLatency, 'API', signal => (
-                fetch(getApiEndpoint('models'), {
-                    headers: { 'Authorization': `Bearer ${settings.apiKey}` },
-                    signal
-                })
-            ));
+                requestJson({ url: buildApiEndpoint(settings.apiUrl, 'models'), apiKey: settings.apiKey, signal })
+            ), () => true);
         };
 
         const checkImageGenStatus = async () => {
@@ -3544,6 +3566,9 @@ const app = createApp({
             chatImageSelectionEpoch++;
             pendingChatImages.value = [];
         };
+        const clearPendingCardInteraction = () => {
+            pendingCardInteraction.value = '';
+        };
         const removePendingChatImage = (id) => {
             pendingChatImages.value = pendingChatImages.value.filter(image => image.id !== id);
         };
@@ -3555,9 +3580,7 @@ const app = createApp({
         });
         const recognizeChatImage = async (image) => {
             try {
-                const result = await requestChatCompletion({
-                    url: getApiEndpoint('chat/completions'),
-                    apiKey: settings.apiKey,
+                const result = await requestTrackedChatCompletion({
                     model: settings.visionModel,
                     temperature: 0.2,
                     stream: false,
@@ -3574,7 +3597,7 @@ const app = createApp({
                             }
                         ]
                     }]
-                });
+                }, 'image_recognition');
                 const target = pendingChatImages.value.find(item => item.id === image.id);
                 if (!target) return true;
                 const description = (Array.isArray(result.content)
@@ -3583,11 +3606,6 @@ const app = createApp({
                 if (!description) throw new Error('识图模型没有返回有效描述');
                 target.description = description;
                 target.status = 'ready';
-                recordApiUsage(result.usage, {
-                    type: 'image_recognition',
-                    model: settings.visionModel,
-                    detail: image.name
-                });
                 return true;
             } catch (error) {
                 const target = pendingChatImages.value.find(item => item.id === image.id);
@@ -3649,35 +3667,44 @@ const app = createApp({
         };
 
         const sendMessage = async () => {
-            if ((!userInput.value.trim() && pendingChatImages.value.length === 0) || isConversationBusy.value || isRecognizingImages.value) return;
+            if ((!userInput.value.trim() && pendingChatImages.value.length === 0 && !pendingCardInteraction.value) || isConversationBusy.value || isRecognizingImages.value) return;
             if (pendingChatImages.value.some(image => image.status !== 'ready')) {
                 showToast('请先移除识别失败的图片', 'warning');
                 return;
             }
 
             const content = userInput.value.trim();
+            const cardInteraction = pendingCardInteraction.value;
             const imageAttachments = pendingChatImages.value.map(({ dataUrl, description }) => ({ dataUrl, description }));
             const startTime = Date.now(); // Record click time
             userInput.value = '';
+            clearPendingCardInteraction();
             clearPendingChatImages();
 
             let finalContent = content;
-            if (sysInstruction.value.trim()) {
-                finalContent += '\n\n[系统指令: ' + sysInstruction.value.trim() + ']';
-                sysInstruction.value = ''; // Auto clear after sending
+            if (cardInteraction) {
+                chatHistory.value.push({
+                    role: 'user',
+                    content: cardInteraction,
+                    isSelf: true,
+                    isTriggered: true,
+                    shouldAnimate: true,
+                    skipReveal: true
+                });
             }
-
-            // Add user message locally with NAME
-            chatHistory.value.push({
-                role: 'user',
-                name: user.name,
-                content: finalContent,
-                shouldAnimate: true,
-                skipReveal: true,
-                isSelf: true,
-                avatar: user.avatar,
-                imageAttachments
-            });
+            if (finalContent || imageAttachments.length) {
+                // Add user message locally with NAME
+                chatHistory.value.push({
+                    role: 'user',
+                    name: user.name,
+                    content: finalContent,
+                    shouldAnimate: true,
+                    skipReveal: true,
+                    isSelf: true,
+                    avatar: user.avatar,
+                    imageAttachments
+                });
+            }
             await nextTick();
 
             // Single player
@@ -3694,6 +3721,7 @@ const app = createApp({
         const clearChat = () => {
             confirmAction('确定要清空聊天记录吗？记忆也将一并清空，此操作无法撤销。', () => {
                 clearPendingChatImages();
+                clearPendingCardInteraction();
                 abortConversationBackgroundWork();
                 resetChatRenderWindow();
                 chatHistory.value = [];
@@ -3765,12 +3793,12 @@ const app = createApp({
                 const messageEl = chatContainer.value?.querySelector(`[data-chat-index="${index}"] .message-content-wrapper`);
                 const messageHeight = messageEl?.getBoundingClientRect?.().height || 0;
                 msg.isEditing_Message = true;
-                const cotMatch = msg.content.match(/<(think|cot)>[\s\S]*?(?:<\/\s*\1\s*>|<\s*\1\s*>|$)/i);
+                const cotInfo = parseCot(msg.content);
                 const uiTemplateUpdateMatch = findUiTemplateUpdateBlock(msg.content);
-                msg.originalCot = cotMatch ? cotMatch[0] : '';
-                msg.originalSys = parseCot(msg.content).sys;
+                msg.originalCot = cotInfo.ranges.map(({ start, end }) => msg.content.slice(start, end)).join('\n\n')
+                    + cotInfo.closingTags;
                 msg.originalUiTemplateUpdate = uiTemplateUpdateMatch ? uiTemplateUpdateMatch[0] : '';
-                msg.originalEditMessageContent = stripUiTemplateUpdateBlock(parseCot(msg.content).main);
+                msg.originalEditMessageContent = stripUiTemplateUpdateBlock(cotInfo.main);
                 msg.editMessageContent = msg.originalEditMessageContent;
                 msg.editMessageHeight = Math.min(0.7 * window.innerHeight, Math.max(88, Math.round(messageHeight || 160)));
             }
@@ -3781,7 +3809,6 @@ const app = createApp({
             delete message.editMessageContent;
             delete message.editMessageHeight;
             delete message.originalCot;
-            delete message.originalSys;
             delete message.originalUiTemplateUpdate;
             delete message.originalEditMessageContent;
         };
@@ -3790,10 +3817,13 @@ const app = createApp({
             const msg = chatHistory.value[index];
             if (msg) {
                 const contentChanged = String(msg.editMessageContent || '') !== String(msg.originalEditMessageContent || '');
-                let finalContent = msg.editMessageContent;
-                if (msg.originalSys) {
-                    finalContent = finalContent + '\n\n[系统指令:\n' + msg.originalSys + ']';
+                if (!contentChanged) {
+                    clearMessageEditState(msg);
+                    await saveChatHistoryNow();
+                    showToast('消息未改动', 'success');
+                    return;
                 }
+                let finalContent = msg.editMessageContent;
                 if (msg.originalUiTemplateUpdate) {
                     finalContent = finalContent.trimEnd() + '\n\n' + msg.originalUiTemplateUpdate;
                 }
@@ -3801,12 +3831,9 @@ const app = createApp({
                     finalContent = msg.originalCot + '\n\n' + finalContent;
                 }
                 msg.content = finalContent;
+                delete msg.styleFilterHits;
+                openStyleFilterMessageKey.value = '';
                 clearMessageEditState(msg);
-                if (!contentChanged) {
-                    await saveChatHistoryNow();
-                    showToast('消息已保存', 'success');
-                    return;
-                }
                 abortConversationBackgroundWork();
                 const snapshot = await ensureConversationMessageIds();
                 const affectedTurn = snapshot.turns.find(turnInfo =>
@@ -3912,7 +3939,10 @@ const app = createApp({
                 .map(m => ({
                     role: m.role,
                     name: m.role === 'user' ? user.name : (m.name || currentCharacter.value.name),
-                    content: replaceUserNamePlaceholder(appendMessageImageDescriptions(m, parseCot(m.content || '').main))
+                    content: replaceUserNamePlaceholder(appendMessageImageDescriptions(
+                        m,
+                        parseCot(stripUiTemplateUpdateBlock(m.content || '')).main
+                    ))
                 }));
             const recentMessages = sourceMessages.slice(-normalizedUiTemplateAnalysisDepth);
 
@@ -3921,8 +3951,6 @@ const app = createApp({
                 markUiTemplateStatus('skipped', '未选模型');
                 return false;
             }
-            const url = getApiEndpoint('chat/completions');
-
             try {
                 const updateRun = startUiTemplateUpdateRun();
                 const isCurrentRun = () => isUiTemplateUpdateRunCurrent(updateRun.seq, lockedTargetMessageId);
@@ -3935,22 +3963,12 @@ const app = createApp({
                 const pendingTemplateUpdates = [];
 
                 const normalizeUiTemplateUpdates = (parsed, template) => {
-                    if (Array.isArray(parsed?.updates)) {
-                        return normalizeUiTemplateUpdateList(parsed, [template]);
-                    }
-                    if (Array.isArray(parsed)) {
-                        return [{ variables: parsed, reason: '' }];
-                    }
-                    if (!parsed || typeof parsed !== 'object') return [];
-                    if (Object.prototype.hasOwnProperty.call(parsed, 'variables')) {
-                        return [{ variables: parsed.variables, reason: String(parsed.reason || '').trim() }];
-                    }
-                    return [{ variables: parsed, reason: '' }];
+                    return normalizeUiTemplateUpdateList(parsed, [template]);
                 };
 
                 const applyTemplateUpdates = (template, updates, model) => {
                     updates.forEach(update => {
-                        const result = applyUiTemplateUpdateListToTemplate(template, [update], { model, turn, matchName: false });
+                        const result = applyUiTemplateUpdateListToTemplate(template, [update], { model, turn });
                         if (result.changed) {
                             changedFieldCount += result.fieldCount;
                             hasChanges = true;
@@ -3963,49 +3981,37 @@ const app = createApp({
                     try {
                         const currentVariableJson = JSON.stringify(template.variableState || {}, null, 2);
                         const variableSchemaText = stringifyUiSchema(template.variableSchema).trim();
-                        const response = await fetch(url, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${settings.apiKey}`
-                            },
-                            body: JSON.stringify({
-                                model,
-                                temperature: 0.2,
-                                stream: false,
-                                messages: [
-                                    {
-                                        role: 'system',
-                                        content: replaceUserNamePlaceholder(BUILTIN_PROMPTS.buildUiTemplateAnalysisSystemPrompt({
-                                            templateId: template.id,
-                                            userInfo: buildUserInfoPrompt(),
-                                            currentVariableJson,
-                                            variableSchemaText,
-                                            userName: user.name
-                                        }))
-                                    },
-                                    {
-                                        role: 'user',
-                                        content: JSON.stringify({
-                                            recentMessages
-                                        }, null, 2)
-                                    }
-                                ]
-                            }),
+                        const result = await requestTrackedChatCompletion({
+                            model, temperature: 0.2, stream: false,
+                            messages: [
+                                {
+                                    role: 'system',
+                                    content: replaceUserNamePlaceholder(BUILTIN_PROMPTS.buildUiTemplateAnalysisSystemPrompt({
+                                        templateId: template.id,
+                                        userInfo: buildUserInfoPrompt(),
+                                        currentVariableJson,
+                                        variableSchemaText,
+                                        userName: user.name
+                                    }))
+                                },
+                                { role: 'user', content: JSON.stringify({ recentMessages }, null, 2) }
+                            ],
                             signal: updateRun.signal
-                        });
+                        }, 'ui_template');
                         if (!isCurrentRun()) return;
-                        if (!response.ok) throw new Error(`API Error: ${response.status}`);
-                        const data = await response.json();
-                        if (!isCurrentRun()) return;
-                        let content = data.choices?.[0]?.message?.content || '';
-                        const parsed = parseUiTemplateUpdateJson(content);
-                        const updates = normalizeUiTemplateUpdates(parsed, template);
-                        recordApiUsage(getApiUsagePayload(data), {
-                            type: 'ui_template',
+                        const content = parseCot(result.content).main;
+                        const latestUiTemplateAnalysis = {
+                            time: new Date().toISOString(),
                             model,
-                            detail: template.name || ''
-                        });
+                            templateId: template.id,
+                            templateName: template.name || template.id,
+                            content: String(content)
+                        };
+                        window.__RPHubLastUiTemplateAnalysis = latestUiTemplateAnalysis;
+                        console.info('[UI模板][副模型] 最新一次变量输出：', latestUiTemplateAnalysis);
+                        const updateBlock = findUiTemplateUpdateBlock(content);
+                        const parsed = parseUiTemplateUpdates(updateBlock ? updateBlock[1] : content, [template]);
+                        const updates = normalizeUiTemplateUpdates(parsed, template);
                         pendingTemplateUpdates.push({ template, updates, model });
                     } catch (e) {
                         if (updateRun.signal.aborted || !isCurrentRun()) return;
@@ -4305,14 +4311,7 @@ const app = createApp({
         };
 
         const getEnabledActiveTools = () => normalizeActiveTools()
-            .filter(tool => tool.enabled !== false && tool.callName)
-            .filter(tool => memorySettings.mode === MEMORY_MODE_VECTOR || !isVectorActiveTool(tool));
-
-        const isVectorActiveTool = (tool) => tool?.type === ACTIVE_TOOL_VECTOR_TYPE
-            || normalizeActiveToolBaseCallName(tool?.callName) === 'tool_memory';
-
-        const isKeywordActiveTool = (tool) => tool?.type === ACTIVE_TOOL_KEYWORD_TYPE
-            || normalizeActiveToolBaseCallName(tool?.callName) === 'tool_grep';
+            .filter(tool => tool.enabled !== false && tool.callName);
 
         const isWebActiveTool = (tool) => tool?.type === ACTIVE_TOOL_WEB_TYPE
             || normalizeActiveToolBaseCallName(tool?.callName) === 'tool_web'
@@ -4320,8 +4319,6 @@ const app = createApp({
             || /tavily|联网搜索/i.test(String(tool?.name || ''));
 
         const getActiveToolDisplayDescription = (tool) => tool?.displayDescription || '暂无说明';
-
-        const shouldSuppressStandardVectorMemoryRecall = () => false;
 
         const appendActiveToolReminderToLatestUserMessage = (msgArray) => {
             if (getEnabledActiveTools().length === 0) return msgArray;
@@ -4345,7 +4342,7 @@ const app = createApp({
         };
 
         const getActiveToolCallLabels = (tool) => {
-            const baseCallName = normalizeActiveToolBaseCallName(tool?.callName || 'tool_memory');
+            const baseCallName = normalizeActiveToolBaseCallName(tool?.callName || 'tool_grep');
             return {
                 add: `${baseCallName}_add`,
                 cover: `${baseCallName}_cover`
@@ -4364,7 +4361,7 @@ const app = createApp({
                         resultCount: tool.resultCount,
                         addCallName: labels.add,
                         coverCallName: labels.cover,
-                        kind: isWebActiveTool(tool) ? 'web' : (isKeywordActiveTool(tool) ? 'keyword' : 'vector')
+                        kind: isWebActiveTool(tool) ? 'web' : 'keyword'
                     };
                 }),
                 reminder: getActiveToolLatestUserReminder(),
@@ -4372,7 +4369,16 @@ const app = createApp({
                 defaultResultCount: ACTIVE_TOOL_DEFAULT_RESULT_COUNT
             });
         };
-        const appendNextResponsePrompt = (messageList, { cotEnabled = false, writingStylePrompt = '' } = {}) => {
+        const usesThinkingCotTag = (model) => /(?:deepseek|glm|kimi)/i.test(String(model || ''));
+        const getMessageThinkingText = (message, includeNativeReasoning = true) => {
+            const parts = includeNativeReasoning ? [String(message?.reasoning || '').trim()] : [];
+            parts.push(parseCot(message?.content || '').rawCot);
+            return [...new Set(parts)].filter(Boolean).join('\n\n');
+        };
+        const wrapAnalysis = (tag, text) => text
+            ? `<${tag}>\n${text.replace(/<\s*\/?\s*(?:thinking|think|cot)\s*>/gi, '')}\n</${tag}>\n`
+            : '';
+        const appendNextResponsePrompt = (messageList, { cotEnabled = false, useThinkingTag = false, writingStylePrompt = '' } = {}) => {
             const target = [...messageList].reverse().find(message => (
                 message?.role === 'user'
                 && Array.isArray(message._sourceIndexes)
@@ -4381,14 +4387,28 @@ const app = createApp({
             if (!target) return;
 
             const prompt = BUILTIN_PROMPTS.buildNextResponsePrompt({
+                autoImageGenEnabled: isAutoImageGenEnabled.value,
                 cotEnabled,
+                imageGenCount: settings.imageGenCount,
+                memoryEnabled: memorySettings.enabled,
+                useThinkingTag,
                 writingStylePrompt,
-                uiTemplateEnabled: settings.uiTemplateEnabled
-                    && settings.uiTemplateMainModelAnalysis
-                    && activeUiTemplates.value.length > 0
+                uiTemplateEnabled: isUiTemplateAnalysisEnabled()
             });
             target.content = `${String(target.content || '').trimEnd()}\n\n${prompt}`;
         };
+        const isLikelyTruncatedResponse = (text) => {
+            const parsed = parseCot(stripUiTemplateUpdateBlock(String(text || '')));
+            if (parsed.ranges.length && !parsed.isFinished) return true;
+            const value = parsed.main
+                .replace(/image###[^\r\n]*###\s*$/i, '')
+                .replace(/[*_~`]+\s*$/g, '')
+                .trim();
+            if (!value) return false;
+            return !/(?:###|[。！？!?；;：:.!?…」』）》）】〕］\]}"'’”>])$/.test(value);
+        };
+        const getTruncationMaxAttempts = () => Math.min(10, Math.max(5, Number(settings.truncationMaxAttempts) || 5));
+
         let _wasCancelled = false;
         const generateResponse = async (startTime = null, options = {}) => {
             const reuseGeneratingState = options.reuseGeneratingState === true;
@@ -4396,6 +4416,8 @@ const app = createApp({
             const activeToolDepth = Number(options.activeToolDepth) || 0;
             const continueAssistantMessageId = options.continueAssistantMessageId || null;
             const continuationToolCallId = options.continuationToolCallId || null;
+            const continuationAttempt = Number(options.continuationAttempt) || 0;
+            const continuationPrompt = String(options.continuationPrompt || '请直接接着上一条回复续写，不要重复已经输出的内容，也不要解释续写过程。');
             const requestModel = settings.model;
 
             if (!currentCharacter.value) {
@@ -4415,8 +4437,9 @@ const app = createApp({
             // 避免底部全局 typing 占位气泡冒出来。
             isReceiving.value = !!continuationTargetMessage;
             isThinking.value = false;
-            activeToolContinuationMessageId.value = continuationTargetMessage?.id || null;
-            activeToolContinuationToolCallId.value = continuationTargetMessage ? continuationToolCallId : null;
+            const isToolContinuation = !!(continuationTargetMessage && continuationToolCallId);
+            activeToolContinuationMessageId.value = isToolContinuation ? continuationTargetMessage.id : null;
+            activeToolContinuationToolCallId.value = isToolContinuation ? continuationToolCallId : null;
             activeToolContinuationHasResponse.value = false;
             abortController.value = new AbortController();
             let generationStartTime = startTime || Date.now();
@@ -4557,16 +4580,40 @@ const app = createApp({
                 chatHistory.value[0].role === 'assistant' &&
                 chatHistory.value[0].content === currentCharacter.value.first_mes;
 
+            const useThinkingTag = usesThinkingCotTag(requestModel);
+            const retainedThinkingTag = useThinkingTag ? 'thinking' : 'cot';
+            const openingText = String(currentCharacter.value.first_mes || '').trim();
+            const openingSourceMessage = openingText
+                ? chatHistory.value.find(source => source?.role === 'assistant'
+                    && parseCot(source.content || '').main.trim() === openingText)
+                : null;
+            const openingThinking = cotPresets.length > 0
+                ? wrapAnalysis(retainedThinkingTag, BUILTIN_PROMPTS.buildOpeningAnalysisContent({
+                    memoryEnabled: memorySettings.enabled,
+                    uiTemplateEnabled: isUiTemplateAnalysisEnabled(),
+                    characterName: currentCharacter.value.name
+                }))
+                : '';
+
             // 如果当前历史记录的第一条是“总结”消息，则认为开场白已被总结包含，不再强制补录开场白
             if (!hasFirstMesInHistory && currentCharacter.value.first_mes) {
                 messages.push({
                     role: 'assistant',
                     name: currentCharacter.value.name,
-                    content: currentCharacter.value.first_mes
+                    content: `${openingThinking}${currentCharacter.value.first_mes}`
                 });
             }
 
             // 记忆压缩：一次总结替换旧 AI 消息；二次总结把对应五轮合成一条。
+            const recentThinkingByMessage = new Map();
+            if (cotPresets.length > 0) {
+                for (let index = chatHistory.value.length - 1; index >= 0 && recentThinkingByMessage.size < 2; index--) {
+                    const source = chatHistory.value[index];
+                    if (source?.role !== 'assistant' || source === openingSourceMessage) continue;
+                    const thinking = getMessageThinkingText(source, useThinkingTag);
+                    if (thinking) recentThinkingByMessage.set(source, thinking);
+                }
+            }
             let chatHistoryForContext = postprocessedChatHistory.map((message, index) => ({
                 ...message,
                 _contextFloor: index + 1
@@ -4700,9 +4747,14 @@ const app = createApp({
                         ? sourceIndexes.map(sourceIndex => chatHistory.value[sourceIndex]).filter(source => source && source.role === m.role)
                         : [m];
                     const cleanSourceContent = (source) => {
-                        // Remove CoT content from history messages before sending to AI.
+                        // Remove internal thinking/COT from history before sending, then restore only the retained recent blocks.
                         const parsedData = parseCot(source.content || '');
-                        let content = stripDisabledImageGenContext(stripNextResponsePrompt(stripUiTemplateContextInjection(parsedData.main)));
+                        let content = stripUiTemplateContextInjection(parsedData.main);
+                        if (!settings.uiTemplateEnabled || !settings.uiTemplateMainModelAnalysis) content = stripUiTemplateUpdateBlock(content);
+                        content = stripDisabledImageGenContext(stripNextResponsePrompt(content));
+                        const recentThinking = source.role === 'assistant' ? recentThinkingByMessage.get(source) : '';
+                        if (recentThinking) content = `${wrapAnalysis(retainedThinkingTag, recentThinking)}${content}`;
+                        if (source === openingSourceMessage && openingThinking) content = `${openingThinking}${content}`;
                         if (source.role === 'user') content = appendMessageImageDescriptions(source, content);
                         if (settings.uiTemplateEnabled
                             && settings.uiTemplateMainModelAnalysis
@@ -4710,13 +4762,9 @@ const app = createApp({
                             && !suppressUiTemplateCorrection
                             && source.uiTemplateCorrection) {
                             content = `${BUILTIN_PROMPTS.buildMainModelUiTemplateCorrectionPrompt({
-                                failedResult: source.uiTemplateCorrection.result,
+                                failureSummary: source.uiTemplateCorrection.summary,
                                 failureReason: source.uiTemplateCorrection.reason
                             })}\n\n${content.trimStart()}`;
-                        }
-                        const cleanSys = stripDisabledImageGenContext(parsedData.sys || '');
-                        if (cleanSys && source.role === 'user') {
-                            content += '\n\n[系统指令: ' + cleanSys + ']';
                         }
                         return content.trim();
                     };
@@ -4739,19 +4787,19 @@ const app = createApp({
             appendPendingUiTemplateCorrection(messages);
             appendNextResponsePrompt(messages, {
                 cotEnabled: cotPresets.length > 0,
+                useThinkingTag: usesThinkingCotTag(requestModel),
                 writingStylePrompt: writingStylePresets
                     .map(preset => preset.content
                         .replace(/^\s*<writing_style>\s*/i, '')
                         .replace(/\s*<\/writing_style>\s*$/i, ''))
-                    .concat(/deepseek/i.test(requestModel) ? '正文最少1000字。' : [])
+                .concat(/deepseek/i.test(requestModel) ? '正文最少700字。' : [])
                     .join('\n\n')
             });
 
             let selectedVectorMemories = [];
             if (memorySettings.enabled
                 && memorySettings.mode === MEMORY_MODE_VECTOR
-                && memories.value.length > 0
-                && !shouldSuppressStandardVectorMemoryRecall()) {
+                && memories.value.length > 0) {
                 selectedVectorMemories = await selectVectorMemoriesForContext(abortController.value.signal, {
                     excludedTurns: getRetainedRecentMemoryTurns(postprocessedChatHistory)
                 });
@@ -4766,7 +4814,7 @@ const app = createApp({
                 messages,
                 worldInfoGroups: wiGroups,
                 vectorMemories: vectorMemoriesForContext,
-                vectorDepth: Number(memorySettings.defaultDepth) || MEMORY_VECTOR_DEFAULT_DEPTH,
+                vectorDepth: MEMORY_VECTOR_DEFAULT_DEPTH,
                 safeTargetLimit
             });
             messages = appendActiveToolReminderToLatestUserMessage(messages);
@@ -4802,6 +4850,12 @@ const app = createApp({
                 name,
                 content
             }));
+            if (continueAssistantMessageId && !continuationToolCallId) {
+                apiMessages.push({
+                    role: 'user',
+                    content: continuationPrompt
+                });
+            }
 
             let generatedAssistantMessageId = null;
             let assistantMessage = null;
@@ -4809,7 +4863,7 @@ const app = createApp({
             let continuationToolCall = null;
             let continuationContentStarted = false;
             let continuationReasoningStarted = false;
-            let responseUsage = null;
+            let generationFailed = false;
 
             if (continuingAssistantMessage && continuationToolCallId && Array.isArray(continuingAssistantMessage.toolCalls)) {
                 continuationToolCall = continuingAssistantMessage.toolCalls.find(call => call && call.id === continuationToolCallId) || null;
@@ -4846,11 +4900,17 @@ const app = createApp({
                 }
 
                 const existing = String(message[field] || '');
+                const appendValue = isContinuation && field === 'content' && !hasStarted
+                    ? String(text).replace(/^\s+/, '')
+                    : text;
+                if (!appendValue) return;
 
                 if (isContinuation && !hasStarted && existing.trim()) {
-                    message[field] = existing.replace(/\s+$/, '') + '\n\n' + text;
+                    message[field] = field === 'content'
+                        ? existing.replace(/\s+$/, '') + appendValue
+                        : existing.replace(/\s+$/, '') + '\n\n' + appendValue;
                 } else {
-                    message[field] = existing + text;
+                    message[field] = existing + appendValue;
                 }
 
                 if (isContinuation && !hasStarted) {
@@ -4861,15 +4921,6 @@ const app = createApp({
                     promoteActiveToolCallsFromAssistant(message);
                 }
                 if (isContinuation) activeToolContinuationHasResponse.value = true;
-            };
-
-            const appendAssistantReasoning = (message, text) => {
-                if (!message || !text) return;
-                if (continuationToolCall && continuingAssistantMessage && message.id === continuingAssistantMessage.id) {
-                    appendAssistantText(message, 'reasoning', text);
-                    return;
-                }
-                appendAssistantText(message, 'reasoning', text);
             };
 
             const createAssistantMessage = (content = '', reasoning = '') => reactive({
@@ -4889,7 +4940,7 @@ const app = createApp({
                 if (assistantMessage) return assistantMessage;
                 if (continuingAssistantMessage) {
                     assistantMessage = prepareAssistantMessageForAppend(continuingAssistantMessage);
-                    if (reasoning) appendAssistantReasoning(assistantMessage, reasoning);
+                    if (reasoning) appendAssistantText(assistantMessage, 'reasoning', reasoning);
                     if (content) appendAssistantText(assistantMessage, 'content', content);
                     isReceiving.value = true;
                     return assistantMessage;
@@ -4903,9 +4954,7 @@ const app = createApp({
             };
 
             try {
-                const responseResult = await requestChatCompletion({
-                    url: getApiEndpoint('chat/completions'),
-                    apiKey: settings.apiKey,
+                const responseResult = await requestTrackedChatCompletion({
                     model: requestModel,
                     messages: apiMessages,
                     temperature: settings.temperature,
@@ -4919,10 +4968,12 @@ const app = createApp({
                         let seededContent = false;
                         let seededReasoning = false;
                         if (!assistantMessage) {
-                            if (reasoning) isThinking.value = true;
                             assistantMessage = ensureAssistantMessage(content, reasoning);
                             seededContent = !!content;
                             seededReasoning = !!reasoning;
+                            if (seededReasoning) {
+                                isThinking.value = true;
+                            }
                             if (seededContent && !reasoning) {
                                 isThinking.value = false;
                                 collapseNativeReasoning(assistantMessage);
@@ -4930,7 +4981,8 @@ const app = createApp({
                             await nextTick();
                         }
                         if (reasoning && !seededReasoning) {
-                            appendAssistantReasoning(assistantMessage, reasoning);
+                            // 原生思考中的文字标签不能改变 API 已指定的通道。
+                            appendAssistantText(assistantMessage, 'reasoning', reasoning);
                             isThinking.value = true;
                         }
                         if (content && !seededContent) {
@@ -4939,39 +4991,42 @@ const app = createApp({
                             collapseNativeReasoning(assistantMessage);
                         }
                     }
-                });
-                responseUsage = responseResult.usage || responseUsage;
+                }, activeToolDepth > 0 ? 'tool_continuation' : 'chat');
 
                 if (!responseResult.isStream) {
                     const { content, reasoning } = responseResult;
                     isThinking.value = !!(reasoning && !content);
                     if (content || reasoning) {
                         assistantMessage = ensureAssistantMessage(content, reasoning);
+                        const hasReasoning = !!String(assistantMessage.reasoning || '').trim();
+                        const hasContent = !!String(assistantMessage.content || '').trim();
+                        isThinking.value = hasReasoning && !hasContent;
+                        const hasReasoningAndContent = hasReasoning && hasContent;
                         if (!continuingAssistantMessage) {
-                            assistantMessage.isReasoningOpen = !(reasoning && content);
-                            assistantMessage.isReasoningAutoCollapsed = !!(reasoning && content);
-                        } else if (reasoning && content) {
+                            assistantMessage.isReasoningOpen = !hasReasoningAndContent;
+                            assistantMessage.isReasoningAutoCollapsed = hasReasoningAndContent;
+                        } else if (hasReasoningAndContent) {
                             collapseNativeReasoning(assistantMessage);
                         }
                     }
                 }
-                recordApiUsage(responseUsage, {
-                    type: activeToolDepth > 0 ? 'tool_continuation' : 'chat',
-                    model: requestModel,
-                    detail: activeToolDepth > 0 ? `第 ${activeToolDepth} 次续写` : ''
-                });
+                const duration = Date.now() - generationStartTime;
 
                 if (assistantMessage) {
                     generatedAssistantMessageId = assistantMessage.id;
-                    if (settings.uiTemplateEnabled && settings.uiTemplateMainModelAnalysis) {
+                    const deferUiTemplateAnalysis = isTruncationEnabled.value
+                        && activeToolDepth === 0
+                        && continuationAttempt < getTruncationMaxAttempts()
+                        && isLikelyTruncatedResponse(assistantMessage.content);
+                    if (settings.uiTemplateEnabled && settings.uiTemplateMainModelAnalysis && !deferUiTemplateAnalysis) {
                         applyMainModelUiTemplateUpdates(assistantMessage, requestModel);
                     }
 
-                    const duration = Date.now() - generationStartTime;
                     recentGenerationTimes.value.push({ id: assistantMessage.id, duration });
                     if (recentGenerationTimes.value.length > 5) recentGenerationTimes.value.shift();
                 }
             } catch (error) {
+                generationFailed = true;
                 if (error.name === 'AbortError') {
                     _wasCancelled = true;
                     showToast('生成已中止', 'info');
@@ -5006,37 +5061,84 @@ const app = createApp({
                     chatHistory.value.push({ role: 'system', name: currentCharacter.value.name, content: error.message });
                 }
             } finally {
-                if (assistantMessage?.content) filterBlockedStyleText(assistantMessage.content, { log: true });
+                if (assistantMessage?.content) {
+                    const styleFilterHits = [];
+                    assistantMessage.content = filterBlockedStyleText(assistantMessage.content, {
+                        log: true,
+                        collect: styleFilterHits
+                    });
+                    const previousHits = continuingAssistantMessage && Array.isArray(assistantMessage.styleFilterHits)
+                        ? assistantMessage.styleFilterHits
+                        : [];
+                    const combinedHits = [...previousHits, ...styleFilterHits]
+                        .map(normalizeStyleFilterHit)
+                        .filter(Boolean);
+                    if (combinedHits.length) assistantMessage.styleFilterHits = combinedHits;
+                    else delete assistantMessage.styleFilterHits;
+                }
                 if (continuationToolCall && continuationToolCall.status === 'continuing') {
                     continuationToolCall.status = 'done';
                 }
                 collapseActiveNativeReasoning();
+                const wasCancelled = _wasCancelled;
+                _wasCancelled = false;
+                const shouldAutoContinue = isTruncationEnabled.value
+                    && !wasCancelled
+                    && !generationFailed
+                    && activeToolDepth === 0
+                    && continuationAttempt < getTruncationMaxAttempts()
+                    && assistantMessage
+                    && isLikelyTruncatedResponse(assistantMessage.content);
+                if (shouldAutoContinue) {
+                    isGenerating.value = true;
+                    isReceiving.value = true;
+                }
                 await saveChatHistoryNow();
-                isGenerating.value = false;
-                isReceiving.value = false;
                 isThinking.value = false;
+                if (!shouldAutoContinue) {
+                    isGenerating.value = false;
+                    isReceiving.value = false;
+                }
                 if (!continueAssistantMessageId || activeToolContinuationMessageId.value === continueAssistantMessageId) {
                     activeToolContinuationMessageId.value = null;
                     activeToolContinuationToolCallId.value = null;
                     activeToolContinuationHasResponse.value = false;
                 }
                 abortController.value = null;
-                const wasCancelled = _wasCancelled;
-                _wasCancelled = false;
                 if (waitTimer) {
                     clearInterval(waitTimer);
                     waitTimer = null;
                 }
 
-                const needsPostGenerationTurns = !wasCancelled
-                    && ((settings.uiTemplateEnabled && generatedAssistantMessageId)
-                        || memorySettings.enabled);
-                const activeToolContinued = !wasCancelled && assistantMessage
-                    ? await handleActiveToolCallFromAssistant(assistantMessage, activeToolDepth)
-                    : false;
+                const activeToolContinued = shouldAutoContinue
+                    ? false
+                    : (!wasCancelled && assistantMessage
+                        ? await handleActiveToolCallFromAssistant(assistantMessage, activeToolDepth)
+                        : false);
                 if (!activeToolContinued) {
                     resetActiveToolResultContext();
                 }
+                if (shouldAutoContinue) {
+                    nextTick(() => {
+                        if (chatHistory.value[chatHistory.value.length - 1] !== assistantMessage
+                            || !assistantMessage.id) {
+                            isGenerating.value = false;
+                            isReceiving.value = false;
+                            return;
+                        }
+                        generateResponse(Date.now(), {
+                            reuseGeneratingState: true,
+                            continueAssistantMessageId: assistantMessage.id,
+                            continuationAttempt: continuationAttempt + 1,
+                            continuationPrompt: '输出被截断，请按输出规则衔接着最后一个字尽快补全当前阶段剧情，不要重复已经输出的内容，不要冗余输出，不要开启新的剧情段落。'
+                        });
+                    });
+                    return;
+                }
+
+                const needsPostGenerationTurns = !wasCancelled
+                    && ((settings.uiTemplateEnabled && generatedAssistantMessageId)
+                        || memorySettings.enabled);
                 const hasCompletedTurns = !activeToolContinued && needsPostGenerationTurns && buildConversationTurnSnapshot().turns.length > 0;
 
                 if (hasCompletedTurns && settings.uiTemplateEnabled && generatedAssistantMessageId && !settings.uiTemplateMainModelAnalysis) {
@@ -5215,78 +5317,29 @@ const app = createApp({
             };
         };
 
-        const getClassicSummaryResponseContent = (rawText) => {
-            const readContent = (value) => {
-                if (Array.isArray(value)) {
-                    return value.map(item => item?.text || item?.content || '').join('');
-                }
-                return String(value || '');
-            };
-
-            try {
-                const data = JSON.parse(rawText);
-                const apiError = extractApiErrorMessage(data);
-                if (apiError) throw new Error(apiError);
-                return readContent(data.choices?.[0]?.message?.content || data.choices?.[0]?.text);
-            } catch (error) {
-                if (error?.name !== 'SyntaxError') throw error;
-            }
-
-            let content = '';
-            String(rawText || '').split(/\r?\n/).forEach(line => {
-                const trimmed = line.trim();
-                if (!trimmed.startsWith('data:')) return;
-                const payload = trimmed.replace(/^data:\s*/, '');
-                if (!payload || payload === '[DONE]') return;
-                try {
-                    const data = JSON.parse(payload);
-                    const choice = data.choices?.[0];
-                    content += readContent(choice?.delta?.content || choice?.message?.content || choice?.text);
-                } catch (_) { }
-            });
-            return content;
-        };
-
-        const requestClassicMemoryCompletion = async (requestMessages, detail, signal) => {
+        const requestClassicMemoryCompletion = async (requestMessages, signal) => {
             const model = String(memorySettings.classicModel || '').trim();
             if (!settings.apiUrl || !settings.apiKey) throw new Error('请先配置 API 地址和 Key');
             if (!model) throw new Error('请先选择总结模式副模型');
 
-            const response = await fetch(getApiEndpoint('chat/completions'), {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${settings.apiKey}`
-                },
-                body: JSON.stringify({ model, temperature: 0.2, stream: false, messages: requestMessages }),
-                signal
-            });
-            const rawText = await response.text();
-            if (!response.ok) {
-                let payload = null;
-                try { payload = JSON.parse(rawText); } catch (_) { }
-                throw new Error(extractApiErrorMessage(payload, response.status) || `API Error: ${response.status}`);
-            }
-            const summary = getClassicSummaryResponseContent(rawText)
+            const result = await requestTrackedChatCompletion({
+                model, temperature: 0.2, stream: false, messages: requestMessages, signal
+            }, 'summary');
+            const summary = parseCot(result.content).main
                 .replace(/^```(?:text|markdown)?\s*/i, '')
                 .replace(/\s*```$/, '')
                 .replace(/^(?:最新对话总结|总结)[:：]\s*/i, '')
                 .trim();
             if (!summary) throw new Error('副模型没有返回有效总结');
-            recordApiUsage(extractApiUsageFromText(rawText), { type: 'summary', model, detail });
             return summary.replace(/\n{3,}/g, '\n\n');
         };
 
         const requestClassicMemorySummary = async (job, signal) => {
-            const summaryLengthRequirement = SUMMARY_LENGTH_REQUIREMENTS[memorySettings.summaryLevel]
-                || SUMMARY_LENGTH_REQUIREMENTS[SUMMARY_LEVEL_DEFAULT];
-
             const requestMessages = [{
                 role: 'system',
                 content: BUILTIN_PROMPTS.buildClassicSummarySystemPrompt({
                     userName: user.name,
-                    characterName: currentCharacter.value?.name,
-                    lengthRequirement: summaryLengthRequirement
+                    characterName: currentCharacter.value?.name
                 })
             }];
 
@@ -5301,21 +5354,18 @@ const app = createApp({
                 role: 'user',
                 content: BUILTIN_PROMPTS.buildClassicSummaryFinalInstruction(job.turn)
             });
-            return requestClassicMemoryCompletion(requestMessages, `第 ${job.turn} 轮`, signal);
+            return requestClassicMemoryCompletion(requestMessages, signal);
         };
 
         const requestClassicSecondarySummary = async (group, signal) => {
             const ordered = [...group].sort((a, b) => Number(a.turn) - Number(b.turn));
             const startTurn = Number(ordered[0]?.turn) || 1;
             const endTurn = Number(ordered[ordered.length - 1]?.turn) || startTurn;
-            const lengthRequirement = SUMMARY_LENGTH_REQUIREMENTS[memorySettings.summaryLevel]
-                || SUMMARY_LENGTH_REQUIREMENTS[SUMMARY_LEVEL_DEFAULT];
             const requestMessages = [{
                 role: 'system',
                 content: BUILTIN_PROMPTS.buildClassicSecondarySummaryPrompt({
                     userName: user.name,
                     characterName: currentCharacter.value?.name,
-                    lengthRequirement,
                     startTurn,
                     endTurn
                 })
@@ -5323,7 +5373,7 @@ const app = createApp({
                 role: 'user',
                 content: ordered.map(memory => `【第 ${memory.turn} 轮】\n${memory.summary}`).join('\n\n')
             }];
-            return requestClassicMemoryCompletion(requestMessages, `第 ${startTurn}-${endTurn} 轮二次压缩`, signal);
+            return requestClassicMemoryCompletion(requestMessages, signal);
         };
 
         const getSecondaryClassicSourceMemories = (memory) => prepareClassicMemoriesForRuntime(
@@ -5663,27 +5713,17 @@ const app = createApp({
             const normalizedInputs = inputs.map(input => String(input || '').trim());
             if (normalizedInputs.some(input => !input)) throw new Error('嵌入内容不能为空');
 
-            const response = await fetch(getApiEndpoint('embeddings'), {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${settings.apiKey}`
-                },
-                body: JSON.stringify({
-                    model,
-                    input: normalizedInputs.length === 1 ? normalizedInputs[0] : normalizedInputs
-                }),
-                signal
+            const requestStartedAt = Date.now();
+            const apiUrl = settings.apiUrl;
+            const apiKey = settings.apiKey;
+            const data = await requestJson({
+                url: buildApiEndpoint(apiUrl, 'embeddings'), apiKey, signal,
+                body: { model, input: normalizedInputs.length === 1 ? normalizedInputs[0] : normalizedInputs }
             });
-
-            if (!response.ok) {
-                let errorPayload = null;
-                try { errorPayload = await response.json(); } catch (_) { }
-                const apiError = extractApiErrorMessage(errorPayload, response.status);
-                throw new Error(apiError || `Embedding API Error: ${response.status}`);
-            }
-
-            const data = await response.json();
+            recordApiUsage(getApiUsagePayload(data), {
+                type: 'embedding', model, apiUrl, apiKey, isStream: false,
+                durationMs: Date.now() - requestStartedAt, outputCharacters: 0
+            });
             const rows = Array.isArray(data.data) ? [...data.data] : [];
             rows.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
             const vectors = rows.map(row => normalizeEmbedding(row.embedding));
@@ -5697,11 +5737,6 @@ const app = createApp({
                 throw new Error('嵌入接口返回的数据不完整');
             }
 
-            recordApiUsage(getApiUsagePayload(data), {
-                type: 'embedding',
-                model,
-                detail: `${normalizedInputs.length} 条输入`
-            });
             return vectors;
         };
 
@@ -5884,8 +5919,7 @@ const app = createApp({
         );
 
         const passesMemorySimilarityThreshold = (score) => {
-            const threshold = Number(memorySettings.similarityThreshold) || MEMORY_VECTOR_DEFAULT_SIMILARITY;
-            return score >= threshold / 100;
+            return score >= MEMORY_VECTOR_SIMILARITY_THRESHOLD / 100;
         };
 
         const getRecentUserMemoryQueries = (limit = 3) => {
@@ -6173,27 +6207,6 @@ const app = createApp({
             isVectorMemorySearching.value = false;
         };
 
-        const searchVectorMemoriesForTool = async (query, limit, signal) => {
-            const cleanQuery = trimMemoryText(stripVectorMemoryCode(query), 800);
-            if (!cleanQuery) return [];
-
-            const excludedTurns = getCurrentRetainedVectorMemoryTurns();
-            const vectorMemories = memories.value
-                .filter(isEnabledVectorMemory)
-                .filter(memory => isEmbeddingLike(memory.embedding) && memory.embedding.length > 0)
-                .filter(memory => {
-                    const turn = Number(memory.turn) || 0;
-                    return turn <= 0 || !excludedTurns.has(turn);
-                });
-            if (vectorMemories.length === 0) return [];
-
-            const [queryVector] = await requestMemoryEmbeddings([`工具检索：${cleanQuery}`], signal);
-            const queryTerms = extractVectorQueryTerms(cleanQuery);
-            return (await scoreVectorMemories(vectorMemories, queryVector, queryTerms, signal))
-                .slice(0, Math.max(ACTIVE_TOOL_MIN_RESULT_COUNT, Math.min(ACTIVE_TOOL_MAX_RESULT_COUNT, Number(limit) || ACTIVE_TOOL_DEFAULT_RESULT_COUNT)))
-                .map(toScoredVectorMemory);
-        };
-
         const extractKeywordToolTerms = (query) => {
             const cleanQuery = trimMemoryText(stripVectorMemoryCode(query), 300);
             if (!cleanQuery) return [];
@@ -6466,7 +6479,7 @@ const app = createApp({
         const formatActiveToolNoticeContext = (tool, query, mode = 'add', status = 'empty', message = '') => {
             const title = escapeXmlAttribute(tool?.name || '工具');
             const modeValue = mode === 'cover' ? 'cover' : 'add';
-            const labels = getActiveToolCallLabels(tool || createDefaultActiveTool());
+            const labels = getActiveToolCallLabels(tool);
             const callName = escapeXmlAttribute(modeValue === 'cover' ? labels.cover : labels.add);
             const cleanQuery = trimMemoryText(query, 800);
             const statusValue = escapeXmlAttribute(status || 'notice');
@@ -6483,7 +6496,7 @@ const app = createApp({
 
         const normalizeActiveToolResultContext = (resultContext, tool, query, mode = 'add') => {
             const text = String(resultContext || '').trim();
-            const hasResultBody = /<(?:description|error|memory_fragment|dialogue_fragment|web_source|web_page|failed_page)\b/i.test(text);
+            const hasResultBody = /<(?:description|error|dialogue_fragment|web_source|web_page|failed_page)\b/i.test(text);
             if (!text || text === '</active_tool_result>' || !text.includes('<active_tool_result') || !hasResultBody) {
                 return formatActiveToolNoticeContext(
                     tool,
@@ -6577,60 +6590,30 @@ const app = createApp({
                     '</active_tool_result>'
                 ].filter(Boolean).join('\n');
             }
-            if (isKeywordActiveTool(tool)) {
-                if (!Array.isArray(results) || results.length === 0) {
-                    return [
-                        `<active_tool_result name="${title}" call="${callName}" mode="${modeValue}" query="${escapeXmlAttribute(cleanQuery)}" status="empty">`,
-                        `  <description>本次关键词检索没有检索成功，没有找到包含该关键词的对话片段，也没有提供可作为答案依据的新证据。${modeDescription}本段内容已插入最后一条用户消息结尾。请换更贴近原文的关键词再次调用，不要编造未出现过的对话内容。</description>`,
-                        '</active_tool_result>'
-                    ].join('\n');
-                }
-
-                const formattedResults = results.map(item => {
-                    const turnValue = escapeXmlAttribute(item.turn || '?');
-                    const roleValue = escapeXmlAttribute(item.role || 'unknown');
-                    const speakerValue = escapeXmlAttribute(item.speaker || '');
-                    const matchedValue = escapeXmlAttribute((item.matchedTerms || []).join(', '));
-                    const fragmentText = indentXmlText(item.dialogueText || '', 4);
-                    return [
-                        `  <dialogue_fragment turn="${turnValue}" role="${roleValue}" speaker="${speakerValue}" matched="${matchedValue}">`,
-                        fragmentText,
-                        '  </dialogue_fragment>'
-                    ].join('\n');
-                }).join('\n\n');
-
-                return [
-                    `<active_tool_result name="${title}" call="${callName}" mode="${modeValue}" query="${escapeXmlAttribute(cleanQuery)}">`,
-                    `  <description>以下是系统根据关键词从当前对话历史中精确抓取到的原文片段。${modeDescription}本段内容由系统插入最后一条用户消息结尾。请优先依据这些原文片段继续回答，不要把没有出现过的内容说成事实；如果仍不足以明确回答，请换更贴近原文的关键词继续调用工具。</description>`,
-                    formattedResults,
-                    '</active_tool_result>'
-                ].join('\n');
-            }
             if (!Array.isArray(results) || results.length === 0) {
                 return [
                     `<active_tool_result name="${title}" call="${callName}" mode="${modeValue}" query="${escapeXmlAttribute(cleanQuery)}" status="empty">`,
-                    `  <description>本次向量记忆没有检索成功，没有找到可用记忆片段，也没有提供可作为答案依据的新证据。${modeDescription}本段内容已插入最后一条用户消息结尾。请先判断当前上下文是否已经明确且足够；如果仍不够明确完整，请换更具体的检索内容再次调用，不要重复完全相同的查询。</description>`,
+                    `  <description>本次关键词检索没有检索成功，没有找到包含该关键词的对话片段，也没有提供可作为答案依据的新证据。${modeDescription}本段内容已插入最后一条用户消息结尾。请换更贴近原文的关键词再次调用，不要编造未出现过的对话内容。</description>`,
                     '</active_tool_result>'
                 ].join('\n');
             }
 
-            const formattedResults = sortVectorMemoriesByTime(results).map(memory => {
-                const turnValue = escapeXmlAttribute(memory.turn || '?');
-                const scoreValue = escapeXmlAttribute(Number.isFinite(memory.vectorScore)
-                    ? `${(memory.vectorScore * 100).toFixed(1)}%`
-                    : 'unknown');
-                const storyTimeValue = escapeXmlAttribute(memory.storyTime || '');
-                const fragmentText = indentXmlText(memory.paragraph || memory.summary || memory.sourceText || '', 4);
+            const formattedResults = results.map(item => {
+                const turnValue = escapeXmlAttribute(item.turn || '?');
+                const roleValue = escapeXmlAttribute(item.role || 'unknown');
+                const speakerValue = escapeXmlAttribute(item.speaker || '');
+                const matchedValue = escapeXmlAttribute((item.matchedTerms || []).join(', '));
+                const fragmentText = indentXmlText(item.dialogueText || '', 4);
                 return [
-                    `  <memory_fragment turn="${turnValue}" similarity="${scoreValue}" story_time="${storyTimeValue}">`,
+                    `  <dialogue_fragment turn="${turnValue}" role="${roleValue}" speaker="${speakerValue}" matched="${matchedValue}">`,
                     fragmentText,
-                    '  </memory_fragment>'
+                    '  </dialogue_fragment>'
                 ].join('\n');
             }).join('\n\n');
 
             return [
                 `<active_tool_result name="${title}" call="${callName}" mode="${modeValue}" query="${escapeXmlAttribute(cleanQuery)}">`,
-                `  <description>以下是系统根据上一条正文工具调用检索到的向量记忆。${modeDescription}本段内容由系统插入最后一条用户消息结尾。请用这些结果继续回答用户，不要复述工具调用标签，也不要把这些内容当作当前现场；如果结果仍不足以明确回答，或仍有疑点，请换更具体的检索内容继续调用工具。</description>`,
+                `  <description>以下是系统根据关键词从当前对话历史中精确抓取到的原文片段。${modeDescription}本段内容由系统插入最后一条用户消息结尾。请优先依据这些原文片段继续回答，不要把没有出现过的内容说成事实；如果仍不足以明确回答，请换更贴近原文的关键词继续调用工具。</description>`,
                 formattedResults,
                 '</active_tool_result>'
             ].join('\n');
@@ -6782,11 +6765,11 @@ const app = createApp({
         const createActiveToolUi = (toolCall, initialStatus = 'queued') => ({
             id: generateUUID(),
             toolId: toolCall.tool?.id || '',
-            toolType: toolCall.tool?.type || ACTIVE_TOOL_VECTOR_TYPE,
+            toolType: toolCall.tool?.type || ACTIVE_TOOL_KEYWORD_TYPE,
             toolResultCount: toolCall.tool?.resultCount || ACTIVE_TOOL_DEFAULT_RESULT_COUNT,
-            name: toolCall.tool?.name || '向量记忆主动检索',
-            callName: toolCall.callLabel || toolCall.tool?.callName || 'tool_memory_add',
-            baseCallName: toolCall.tool?.callName || 'tool_memory',
+            name: toolCall.tool?.name || '关键词检索',
+            callName: toolCall.callLabel || toolCall.tool?.callName || 'tool_grep_add',
+            baseCallName: toolCall.tool?.callName || 'tool_grep',
             mode: toolCall.mode || 'add',
             query: toolCall.query || '',
             raw: toolCall.raw,
@@ -6806,24 +6789,20 @@ const app = createApp({
                 || toolCall?.callName
                 || ''
             );
-            if (toolCall?.toolType === ACTIVE_TOOL_KEYWORD_TYPE || baseCallName === 'tool_grep') {
-                return ACTIVE_TOOL_KEYWORD_TYPE;
-            }
             if (toolCall?.toolType === ACTIVE_TOOL_WEB_TYPE || baseCallName === 'tool_web') {
                 return ACTIVE_TOOL_WEB_TYPE;
             }
-            if (toolCall?.toolType === ACTIVE_TOOL_VECTOR_TYPE || baseCallName === 'tool_memory') {
-                return ACTIVE_TOOL_VECTOR_TYPE;
+            if (toolCall?.toolType === ACTIVE_TOOL_KEYWORD_TYPE || baseCallName === 'tool_grep') {
+                return ACTIVE_TOOL_KEYWORD_TYPE;
             }
-            return baseCallName || toolCall?.toolId || ACTIVE_TOOL_VECTOR_TYPE;
+            return '';
         };
 
         const getToolCallDisplayName = (toolCall) => {
             const groupKey = getActiveToolUiGroupKey(toolCall);
-            if (groupKey === ACTIVE_TOOL_KEYWORD_TYPE) return '关键词检索';
             if (groupKey === ACTIVE_TOOL_WEB_TYPE) return 'Tavily 联网搜索';
-            if (groupKey === ACTIVE_TOOL_VECTOR_TYPE) return '向量记忆主动检索';
-            return toolCall?.name || '向量记忆主动检索';
+            if (groupKey === ACTIVE_TOOL_KEYWORD_TYPE) return '关键词检索';
+            return toolCall?.name || '工具调用';
         };
 
         const getToolCallModeText = (toolCall) => {
@@ -6840,8 +6819,7 @@ const app = createApp({
             if (groupKey === ACTIVE_TOOL_KEYWORD_TYPE) {
                 return mode === 'cover' ? '覆盖关键词检索' : '关键词检索';
             }
-
-            return mode === 'cover' ? '覆盖向量检索' : '向量检索';
+            return '工具调用';
         };
 
         const TOOL_CALL_RUNNING_STATUSES = ['running', 'receiving', 'queued'];
@@ -7048,10 +7026,10 @@ const app = createApp({
                 message._activeToolPendingUiId = toolUi.id;
             }
             toolUi.toolId = toolCall.tool?.id || toolUi.toolId || '';
-            toolUi.toolType = toolCall.tool?.type || toolUi.toolType || ACTIVE_TOOL_VECTOR_TYPE;
+            toolUi.toolType = toolCall.tool?.type || toolUi.toolType || ACTIVE_TOOL_KEYWORD_TYPE;
             toolUi.name = toolCall.tool?.name || toolUi.name || '工具';
-            toolUi.callName = toolCall.callLabel || toolUi.callName || 'tool_memory_add';
-            toolUi.baseCallName = toolCall.tool?.callName || toolUi.baseCallName || 'tool_memory';
+            toolUi.callName = toolCall.callLabel || toolUi.callName || 'tool_grep_add';
+            toolUi.baseCallName = toolCall.tool?.callName || toolUi.baseCallName || 'tool_grep';
             toolUi.mode = toolCall.mode || toolUi.mode || 'add';
             toolUi.query = getPendingToolCallQueryPreview(toolCall);
             toolUi.reason = cleanActiveToolCallReason(toolCall.reason || toolUi.reason || '');
@@ -7142,7 +7120,7 @@ const app = createApp({
             const baseCallName = normalizeActiveToolBaseCallName(
                 toolUi?.baseCallName
                 || toolUi?.callName
-                || 'tool_memory'
+                || 'tool_grep'
             );
             const enabledMatch = getEnabledActiveTools().find(tool => (
                 tool.id === toolUi?.toolId
@@ -7152,11 +7130,12 @@ const app = createApp({
             return getDefaultActiveToolDefinitions().find(tool => (
                 tool.id === toolUi?.toolId
                 || normalizeActiveToolBaseCallName(tool.callName) === baseCallName
-            )) || createDefaultActiveTool();
+            )) || null;
         };
 
         const buildActiveToolCallFromUi = (toolUi) => {
             const tool = resolveActiveToolForUi(toolUi);
+            if (!tool) return null;
             return {
                 tool,
                 mode: toolUi?.mode || 'add',
@@ -7172,7 +7151,7 @@ const app = createApp({
             let toolUis = Array.isArray(assistantMessage?.toolCalls)
                 ? assistantMessage.toolCalls.filter(toolCall => ['queued', 'running'].includes(toolCall?.status))
                 : [];
-            let toolCalls = toolUis.map(buildActiveToolCallFromUi).filter(toolCall => toolCall.query);
+            let toolCalls = toolUis.map(buildActiveToolCallFromUi).filter(toolCall => toolCall?.query);
 
             if (toolCalls.length === 0) {
                 toolCalls = findActiveToolCallsInAssistantMessage(assistantMessage);
@@ -7240,25 +7219,15 @@ const app = createApp({
                         await saveChatHistoryNow();
                     }
 
-                    if (isVectorActiveTool(toolCall.tool) && !memorySettings.enabled) {
-                        throw new Error('记忆系统未开启，无法执行向量检索。');
-                    }
-
-                    const results = isKeywordActiveTool(toolCall.tool)
-                        ? searchDialogueByKeywordForTool(toolCall.query, toolCall.tool.resultCount, {
-                            excludeMessageId: assistantMessage.id
-                        })
-                        : isWebActiveTool(toolCall.tool)
+                    const results = isWebActiveTool(toolCall.tool)
                         ? await searchWebByTavilyForTool(
                             toolCall.query,
                             toolCall.tool,
                             toolAbort.signal
                         )
-                        : await searchVectorMemoriesForTool(
-                            toolCall.query,
-                            toolCall.tool.resultCount,
-                            toolAbort.signal
-                        );
+                        : searchDialogueByKeywordForTool(toolCall.query, toolCall.tool.resultCount, {
+                            excludeMessageId: assistantMessage.id
+                        });
                     if (toolAbort.signal.aborted) throw createAbortReason('Generation cancelled by user');
 
                     const resultContext = normalizeActiveToolResultContext(
@@ -8037,7 +8006,7 @@ const app = createApp({
             const imageRequestUrl = `${baseUrl}/generate?tag=$1&token=${encodeURIComponent(imageGenToken)}&model=${settings.imageModel}&artist=${encodedTargetArtists}&size=${settings.imageSize}&steps=40&scale=6&cfg=0&sampler=k_dpmpp_2m_sde&negative={{{{bad anatomy}}}},{bad feet},bad hands,{{{bad proportions}}},{blurry},cloned face,cropped,{{{deformed}}},{{{disfigured}}},error,{{{extra arms}}},{extra digit},{{{extra legs}}},extra limbs,{{extra limbs}},{fewer digits},{{{fused fingers}}},gross proportions,ink eyes,ink hair,jpeg artifacts,{{{{long neck}}}},low quality,{malformed limbs},{{missing arms}},{missing fingers}},{{missing legs}},{{{more than 2 nipples}}},mutated hands,{{{mutation}}},normal quality,owres,{{poorly drawn face}},{{poorly drawn hands}},reen eyes,signature,text,{{too many fingers}},{{{ugly}}},username,uta,watermark,worst quality,{{{more than 2 legs}}},awkward hand sign,weird hand gesture,contorted hand,unnatural finger pose,deformed hand gesture,{shaka},{hang loose},{{rock on}},{shaka sign}&nocache=0&noise_schedule=karras`;
             const imageGenRegexContent = {
                 name: imageGenRegexName,
-                regex: '/image###([\\s\\S]*?)###/g',
+                regex: getImageTagRegex().toString(),
             replacement: `<div class="generated-image-card is-generating" data-image-request="${imageRequestUrl}" style="width:100%;height:auto;max-width:100%;box-sizing:border-box;padding:2px;border:1px solid rgba(255,255,255,.58);background:transparent;position:relative;border-radius:12px;overflow:hidden;display:flex;justify-content:center;align-items:center;box-shadow:0 4px 14px rgba(148,163,184,.06)"><img alt="" style="max-width:100%;height:100%;width:100%;display:block;object-fit:contain;border-radius:9px;transition:transform .3s ease"><div class="generated-image-progress" aria-live="polite"><svg class="generated-image-spinner" viewBox="0 0 50 50" aria-hidden="true"><circle class="generated-image-spinner-path" cx="25" cy="25" r="20" fill="none" stroke-width="2"></circle></svg><span class="generated-image-progress-label">等待生成</span><span class="generated-image-progress-track"><i class="generated-image-progress-bar"></i></span></div><button type="button" class="generated-image-reroll" title="重新生成图片" aria-label="重新生成图片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg></button></div>`,
                 placement: [2],
                 markdownOnly: true,
@@ -8059,7 +8028,7 @@ const app = createApp({
 
             // 2. 自动生图世界书
             const autoImageGenWIName = '自动生图';
-            const imageGenCount = Math.min(8, Math.max(1, Number(settings.imageGenCount) || 2));
+            const imageGenCount = Math.min(8, Math.max(2, Number(settings.imageGenCount) || 2));
             const autoImageGenWIContent = {
                 comment: autoImageGenWIName,
                 keys: [],
@@ -8106,6 +8075,14 @@ const app = createApp({
                 }
                 if (msg.role === 'assistant' && msg.isSummaryOpen === undefined && hasThinkingOrTools(msg)) {
                     msg.isSummaryOpen = false;
+                }
+                if (msg.role === 'assistant' && Array.isArray(msg.styleFilterHits)) {
+                    msg.styleFilterHits = msg.styleFilterHits
+                        .map(normalizeStyleFilterHit)
+                        .filter(Boolean);
+                    if (!msg.styleFilterHits.length) delete msg.styleFilterHits;
+                } else {
+                    delete msg.styleFilterHits;
                 }
                 return msg;
             });
@@ -8500,6 +8477,7 @@ const app = createApp({
             const target = storyBranches.value.find(branch => branch.id === branchId);
             if (!char?.uuid || !target || branchId === activeStoryBranchId.value || storyBranchSwitching.value) return;
             clearPendingChatImages();
+            clearPendingCardInteraction();
             storyBranchSwitching.value = true;
             try {
                 if (!await saveCurrentStoryBranchState()) return;
@@ -8601,6 +8579,7 @@ const app = createApp({
                 return;
             }
             clearPendingChatImages();
+            clearPendingCardInteraction();
             const switchEpoch = ++_characterSwitchEpoch;
             const isLatestSwitch = () => switchEpoch === _characterSwitchEpoch;
             switchingCharacterIndex.value = index;
@@ -9104,23 +9083,17 @@ const app = createApp({
 
         // Expose triggerSlash for character cards (Defined early)
         window.triggerSlash = async (text) => {
-            if (!text) return;
+            const command = String(text || '').trim();
+            if (!command) return;
 
-            if (isGenerating.value) {
+            if (isConversationBusy.value) {
                 showToast('正在生成中，请稍后...', 'warning');
                 return;
             }
 
-            const startTime = Date.now(); // Record trigger time
-
-            // Add user message with explicit reactivity update
-            const newMessage = { role: 'user', content: text, isSelf: true, isTriggered: true, shouldAnimate: true, skipReveal: true };
-            // Push and force update to ensure v-if picks up the new property
-            chatHistory.value = [...chatHistory.value, newMessage];
-
+            pendingCardInteraction.value = command;
             await nextTick();
-
-            await generateResponse(startTime);
+            inputBox.value?.focus();
         };
 
         // Lifecycle
@@ -9187,6 +9160,9 @@ const app = createApp({
             // 1.7.2 Enforce Default Preset (人格内核)
             syncBuiltinPreset(BUILTIN_PRESETS.personalityCore);
 
+            // 1.7.3 Enforce Default Preset (去User中心化)
+            syncBuiltinPreset(BUILTIN_PRESETS.deUserCentric);
+
             // 1.7.5 Enforce Default Preset (文风（抗八股）)
             syncBuiltinPreset(BUILTIN_PRESETS.writingStyle);
 
@@ -9216,31 +9192,51 @@ const app = createApp({
             // 1.10 Enforce Default Preset (COT)
             const cotPresetName = 'COT';
             const syncCotPresetContent = () => {
+                const useThinkingOpening = usesThinkingCotTag(settings.model);
+                const uiTemplateAnalysisEnabled = isUiTemplateAnalysisEnabled();
                 const cotPresetContent = buildCotPresetContent({
                     memoryEnabled: memorySettings.enabled,
-                    uiTemplateAnalysisEnabled: settings.uiTemplateEnabled
-                        && settings.uiTemplateMainModelAnalysis
-                        && activeUiTemplates.value.length > 0
+                    uiTemplateAnalysisEnabled,
+                    useThinkingOpening
                 });
-                const existingCotPreset = presets.value.find(p => p.name === cotPresetName);
+                let existingCotPreset = presets.value.find(p => p.name === cotPresetName);
                 if (!existingCotPreset) {
                     presets.value.push({
                         name: cotPresetName,
                         content: cotPresetContent,
                         enabled: true
                     });
-                    return;
-                }
-                if (existingCotPreset.content !== cotPresetContent) {
+                    existingCotPreset = presets.value.find(p => p.name === cotPresetName);
+                } else if (existingCotPreset.content !== cotPresetContent) {
                     existingCotPreset.content = cotPresetContent;
                 }
+
+                const prefillEnabled = existingCotPreset?.enabled !== false;
+                BUILTIN_CORE_PRESETS.forEach(preset => {
+                    const prefillPhase = preset.name === '破限预注入 · AI 1' ? 1
+                        : preset.name === '破限预注入 · AI 2' ? 2
+                            : 0;
+                    if (!prefillPhase) return;
+                    const existingPreset = presets.value.find(item => item.name === preset.name);
+                    if (!existingPreset) return;
+                    existingPreset.content = buildCotPresetContent({
+                        memoryEnabled: memorySettings.enabled,
+                        uiTemplateAnalysisEnabled,
+                        useThinkingOpening,
+                        prefillPhase,
+                        prefillEnabled,
+                        prefillBaseContent: preset.content
+                    });
+                });
             };
             syncCotPresetContent();
             watch([
                 () => memorySettings.enabled,
                 () => settings.uiTemplateEnabled,
                 () => settings.uiTemplateMainModelAnalysis,
-                () => activeUiTemplates.value.length
+                () => activeUiTemplates.value.length,
+                () => settings.model,
+                () => presets.value.find(preset => preset.name === cotPresetName)?.enabled
             ], syncCotPresetContent);
             removeLegacyUserRegex();
 
@@ -9302,9 +9298,7 @@ const app = createApp({
                 selectCharacter(0);
             }
 
-            if (settings.autoFetchModels) {
-                fetchModels();
-            }
+            fetchModels();
 
             // Initial Status Check
             checkAllStatuses();
@@ -9324,9 +9318,6 @@ const app = createApp({
                     && !e.target.closest('.settings-help-trigger')
                     && !e.target.closest('.settings-help-popover')) {
                     settingsHelpTopic.value = '';
-                }
-                if (showInstructionPanel.value && !e.target.closest('.instruction-panel-container')) {
-                    showInstructionPanel.value = false;
                 }
                 if (showTokenUsageTimeFilter.value && !e.target.closest('.token-usage-time-filter-container')) {
                     showTokenUsageTimeFilter.value = false;
@@ -9359,6 +9350,16 @@ const app = createApp({
         const processMainContent = (mainText, isGeneratingState) => {
             mainText = stripUiTemplateUpdateBlock(mainText);
             if (!isGeneratingState) return { text: mainText, showSpinner: false };
+            const imageStart = cardUtils.findLastUnprotectedMatch(mainText, /image###/gi)?.index ?? -1;
+            if (imageStart !== -1) {
+                const imageTail = mainText.slice(imageStart + 'image###'.length);
+                if (!imageTail.includes('###')
+                    && (isTruncationEnabled.value || !/[\r\n]/.test(imageTail))) {
+                    const lineBreak = imageTail.search(/[\r\n]/);
+                    mainText = mainText.slice(0, imageStart)
+                        + (lineBreak >= 0 ? imageTail.slice(lineBreak) : '');
+                }
+            }
             const patterns = ['```html', '```vue', '<!DOCTYPE', '<div', '<style'];
             let earliestIndex = -1;
             for (const p of patterns) {
@@ -9536,7 +9537,7 @@ const app = createApp({
             processMainContent, replaceUserNamePlaceholder,
             currentView, showDescriptionPanel, showModelSelector, modelSelectionTarget, openModelSelector, showChatModelSelector, showCharacterEditor, showAddCharacterMenu, showPresetEditor, showUiTemplateEditor,
             showActiveToolEditor,
-            showExportModal, sysInstruction, showInstructionPanel, exportItems, selectedExportIndices, // Export Modal
+            showExportModal, exportItems, selectedExportIndices, // Export Modal
             showContextViewerModal, lastContextMessages, lastTriggeredWorldInfos,
             lastContextTotalLength, lastContextFloorCount, // Context Viewer
             showStoryBranchModal, showStoryBranchNameEditor, storyBranchNameDraft,
@@ -9550,15 +9551,17 @@ const app = createApp({
             tokenUsageHistory, tokenUsagePage, tokenUsagePageCount, tokenUsageFilter, tokenUsageTimeFilter,
             showTokenUsageTimeFilter, tokenUsageTimeFilterOptions, tokenUsageTimeFilterLabel,
             filteredTokenUsageHistory, tokenUsageStats, displayedTokenUsageHistory,
+            latestMainTokenUsage, formatLatestTokenCount, formatLatestUsageCost,
             getUncachedInputTokens, formatTokenCount, formatTokenAggregate, formatTokenUsageTime, getTokenUsageTypeLabel, clearTokenUsageHistory,
             storageStats, refreshStorageStats, cleanupUnusedStorage, formatStorageSize,
             showCharacterExportModal, openCharacterExportModal, confirmCharacterExport, // Character Export Modal
             updateModalRef, latestUpdateConfig,
-            showConfirmModal, confirmMessage, modelMode, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, showNoMemoryNeededModal, // Export for template
-            isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
+            showConfirmModal, confirmMessage, modelMode, isGeminiModel, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, showNoMemoryNeededModal, // Export for template
+            isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingCardInteraction, clearPendingCardInteraction, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
             user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontFamilyOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, regexScripts, worldInfo,
             activeTools, activeToolAggressivenessOptions: ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS, editingActiveTool, normalizeActiveTools, isWebActiveTool, getActiveToolDisplayDescription, getActiveToolResultCountMin, getActiveToolResultCountMax,
             getToolCallModeText, hasThinkingOrTools, isMessageThinkingOrRunning, isThinkingSummaryOpen, toggleThinkingSummary, markThinkingSummaryDetailOpened, getTimelineSteps,
+            isStyleFilterDetailsOpen, toggleStyleFilterDetails, getStyleFilterHitSegments,
             chatRoundStats, conversationBodyLength, summaryCompressedBodyLength, summaryCompressionRate,
             editingCharacter, editingPreset, editingUiTemplate, toasts, chatContainer, isChatFullscreen, isMobileKeyboardOpen, inputBox, messageElements,
             isGeneratorLoading, generatorUrl, onGeneratorLoad, // Generator exports
@@ -9617,118 +9620,6 @@ const app = createApp({
                     showToast(`${modeName}已清空`, 'success');
                 });
             },
-            exportMemories: async () => {
-                const isClassicMode = memorySettings.mode === MEMORY_MODE_CLASSIC;
-                let exportData;
-                if (isClassicMode) {
-                    if (classicMemories.value.length === 0) { showToast('当前模式没有记忆可导出', 'info'); return; }
-                    const exportedMemories = [...classicMemories.value]
-                        .sort((a, b) => (a.turn || 0) - (b.turn || 0))
-                        .map(memory => {
-                            const sourceMemories = isSecondaryClassicMemory(memory)
-                                ? getSecondaryClassicSourceMemories(memory)
-                                : [];
-                            return {
-                                turn: memory.turn,
-                                turnStart: memory.turnStart,
-                                turnEnd: memory.turnEnd,
-                                secondaryCompressed: memory.secondaryCompressed === true,
-                                summaryModel: memory.summaryModel || '',
-                                user: {
-                                    content: memory.sourceUserText
-                                        || sourceMemories.map(item => item.sourceUserText || '').filter(Boolean).join('\n\n'),
-                                    messageIds: memory.sourceUserIds || []
-                                },
-                                assistant: {
-                                    content: memory.sourceAssistantText
-                                        || sourceMemories.map(item => item.sourceAssistantText || '').filter(Boolean).join('\n\n'),
-                                    messageIds: memory.sourceAssistantIds || []
-                                },
-                                summary: memory.summary,
-                                sourceMemories: isSecondaryClassicMemory(memory)
-                                    ? cloneForStorage(memory.sourceMemories || [])
-                                    : undefined
-                            };
-                        });
-                    exportData = {
-                        type: 'rp-hub-summary-memories',
-                        version: 2,
-                        character: currentCharacter.value?.name || 'unknown',
-                        exportedAt: new Date().toISOString(),
-                        total: exportedMemories.length,
-                        memories: exportedMemories
-                    };
-                } else {
-                    exportData = await compactMemoriesForStorageAsync(memories.value);
-                    if (exportData.length === 0) { showToast('当前模式没有记忆可导出', 'info'); return; }
-                }
-                const blob = downloadJsonFile(
-                    exportData,
-                    `${isClassicMode ? 'summary_memories' : 'vector_memories'}_${currentCharacter.value?.name || 'unknown'}.json`,
-                    isClassicMode ? 2 : 0,
-                    { revokeDelay: 1000 }
-                );
-                showToast(`${isClassicMode ? '总结模式' : '向量'}记忆已导出，约 ${Math.max(1, Math.round(blob.size / 1024))} KB`, 'success');
-            },
-            importMemories: (event) => readJsonFileInput(event, async data => {
-                const isClassicMode = memorySettings.mode === MEMORY_MODE_CLASSIC;
-                if (isClassicMode) {
-                    if (data?.type !== 'rp-hub-summary-memories' || !Array.isArray(data.memories)) {
-                        throw new Error('这不是总结模式记忆文件');
-                    }
-                    const normalized = prepareClassicMemoriesForRuntime(data.memories.map(memory => ({
-                        id: generateUUID(),
-                        timestamp: Date.now(),
-                        turn: memory?.turn,
-                        turnStart: memory?.turnStart,
-                        turnEnd: memory?.turnEnd,
-                        summary: memory?.summary,
-                        enabled: true,
-                        classicMemory: true,
-                        secondaryCompressed: memory?.secondaryCompressed === true,
-                        summaryModel: String(memory?.summaryModel || ''),
-                        sourceUserIds: Array.isArray(memory?.user?.messageIds) ? memory.user.messageIds : [],
-                        sourceAssistantIds: Array.isArray(memory?.assistant?.messageIds) ? memory.assistant.messageIds : [],
-                        sourceUserText: String(memory?.user?.content || ''),
-                        sourceAssistantText: String(memory?.assistant?.content || ''),
-                        sourceMemories: Array.isArray(memory?.sourceMemories) ? memory.sourceMemories : []
-                    })));
-                    if (normalized.length === 0) throw new Error('文件中没有有效的总结模式记忆');
-                    const existingKeys = new Set(classicMemories.value.map(memory => getClassicMemoryKey(memory.sourceAssistantIds, memory.turn)));
-                    const added = normalized.filter(memory => {
-                        const key = getClassicMemoryKey(memory.sourceAssistantIds, memory.turn);
-                        if (existingKeys.has(key)) return false;
-                        existingKeys.add(key);
-                        return true;
-                    });
-                    classicMemories.value = [...classicMemories.value, ...added];
-                    await saveClassicMemoriesNow();
-                    showToast(`成功导入 ${added.length} 条总结模式记忆`, 'success');
-                    return;
-                }
-
-                const items = Array.isArray(data) ? data : data?.memories;
-                if (!Array.isArray(items)) throw new Error('文件内容不正确');
-                const normalized = items
-                    .filter(m => m && m.vectorMemory === true && hasVectorEmbedding(m))
-                    .map(m => {
-                        const { importance, ...memoryData } = m;
-                        return {
-                            ...memoryData,
-                            id: memoryData.id || generateUUID(),
-                            timestamp: memoryData.timestamp || Date.now(),
-                            turn: memoryData.turn || 0,
-                            summary: String(memoryData.summary || memoryData.paragraph || '').trim(),
-                            vectorMemory: true,
-                            chunkMode: 'paragraph',
-                            enabled: memoryData.enabled !== false
-                        };
-                    });
-                if (normalized.length === 0) throw new Error('这不是向量记忆文件');
-                memories.value = [...memories.value, ...prepareMemoriesForRuntime(normalized)];
-                await saveMemoriesNow();
-                showToast(`成功导入 ${normalized.length} 个分片`, 'success');
-            }, error => showToast(`导入失败: ${error.message || 'JSON 格式错误'}`, 'error')),
             toggleMobileMenu, closeMobileMenu,
             fetchModels, selectModel, selectQuickModels, sendMessage, autoResizeInput, handleChatInputFocus, handleChatInputBlur, stopGeneration, clearChat, toggleChatFullscreen,
             handleConfirm, handleCancel, // Export handlers

@@ -685,13 +685,10 @@
                 }, 100);
             };
             const close = () => {
-                if (remoteUpdateId.value !== null) {
-                    window.location.reload();
-                    return;
-                }
                 if (countdown.value > 0) return;
                 show.value = false;
                 clearTimers();
+                remoteUpdateId.value = null;
                 localStorage.setItem('roleplay_hub_update_id', String(props.update.id));
                 if (pendingRemoteUpdateId.value !== null) {
                     const versionId = pendingRemoteUpdateId.value;
@@ -722,7 +719,7 @@
                     </div>
                     <div ref="contentEl" class="p-4 max-h-[75vh] overflow-y-auto custom-scrollbar update-content" @scroll="handleScroll">
                         <div v-if="remoteUpdateId" class="py-6 text-center">
-                            <p class="text-lg font-bold text-gray-800">发现新版本，请刷新页面更新</p>
+                            <p class="text-lg font-bold text-gray-800">发现新版本，手动刷新页面后更新</p>
                         </div>
                         <div v-else class="prose prose-sm prose-gray max-w-none">
                             <div class="markdown-body" v-html="renderMarkdown(update.content, 'assistant', true)"></div>
@@ -731,7 +728,7 @@
                             <button @click="close" :disabled="!remoteUpdateId && countdown > 0"
                                 :class="{ 'opacity-50 cursor-not-allowed': !remoteUpdateId && countdown > 0 }"
                                 class="px-10 py-2.5 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-lg shadow-sm hover:shadow transition-all active:scale-95">
-                                {{ remoteUpdateId ? '立即刷新' : '知道了' }} <span v-if="!remoteUpdateId && countdown > 0">({{ countdown }}s)</span>
+                                知道了 <span v-if="!remoteUpdateId && countdown > 0">({{ countdown }}s)</span>
                             </button>
                         </div>
                     </div>
@@ -1418,7 +1415,74 @@
                 } catch (error) {
                     return String(value);
                 }
+            },
+            checkProtocol() {
+                const utils = window.RPHubUiTemplateUtils;
+                const checks = [];
+                if (!utils?.normalizeUiTemplateUpdateList) {
+                    this.protocolCheck = { ok: false, message: '模板校验器尚未加载', checks: [] };
+                    return;
+                }
+                let variableState;
+                try {
+                    variableState = JSON.parse(this.templateData.variableStateText || '{}');
+                    if (variableState === null || typeof variableState !== 'object') throw new Error('变量状态必须是 JSON 对象或数组');
+                    checks.push('变量 JSON 格式正确');
+                } catch (error) {
+                    this.protocolCheck = { ok: false, message: error.message || '变量 JSON 格式错误', checks: [] };
+                    return;
+                }
+                let variableSchema = this.templateData.variableSchemaText || '';
+                if (variableSchema.trim()) {
+                    try { variableSchema = JSON.parse(variableSchema); } catch (error) { /* 变量说明允许使用普通文字 */ }
+                }
+                try {
+                    const template = {
+                        id: this.templateData.id || '__preview__',
+                        name: this.templateData.name || '当前模板',
+                        variableState,
+                        variableSchema
+                    };
+                    utils.normalizeUiTemplateUpdateList({ updates: [{ id: template.id, variables: variableState }] }, [template]);
+                    checks.push('变量结构与 JSON 更新协议兼容');
+                } catch (error) {
+                    this.protocolCheck = { ok: false, message: error.message || '变量结构检查失败', checks };
+                    return;
+                }
+                if (!String(this.templateData.htmlTemplate || '').trim()) {
+                    this.protocolCheck = { ok: false, message: 'HTML 模板为空', checks };
+                    return;
+                }
+                checks.push('HTML 模板可用于预览');
+                this.protocolCheck = { ok: true, message: '模板协议检查通过', checks };
             }
+        },
+        data() {
+            return { protocolCheck: null, protocolCheckTimer: null };
+        },
+        computed: {
+            protocolCheckInput() {
+                return this.show && this.tab === 'edit'
+                    ? [this.templateData.htmlTemplate, this.templateData.variableStateText, this.templateData.variableSchemaText]
+                    : null;
+            }
+        },
+        watch: {
+            protocolCheckInput: {
+                immediate: true,
+                handler(input) {
+                    clearTimeout(this.protocolCheckTimer);
+                    this.protocolCheckTimer = null;
+                    this.protocolCheck = null;
+                    if (input) this.protocolCheckTimer = setTimeout(() => {
+                        this.protocolCheckTimer = null;
+                        this.checkProtocol();
+                    }, 500);
+                }
+            }
+        },
+        beforeUnmount() {
+            clearTimeout(this.protocolCheckTimer);
         },
         template: `
             <modal-shell v-if="show" overlay-class="z-50 bg-black/50 backdrop-blur-sm p-2 md:p-3 animate-fade-in"
@@ -1446,7 +1510,6 @@
                             <div v-if="!(templateData.changeLog || []).length" class="bg-white border border-dashed border-gray-200 rounded-2xl p-8 text-center text-gray-400">暂无变更记录</div>
                             <div v-else class="space-y-3">
                                 <div v-for="log in (templateData.changeLog || []).slice(0, 1)" :key="log.id" class="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
-                                    <div v-if="log.reason" class="rounded-xl bg-amber-50/70 border border-amber-100 px-3 py-2 text-xs text-amber-800 leading-relaxed">{{ log.reason }}</div>
                                     <div class="mt-3 space-y-3">
                                         <div v-for="(change, key) in (log.changes || {})" :key="key" class="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
                                             <div class="text-xs font-bold text-gray-700 mb-2">{{ key }}</div>
@@ -1493,6 +1556,11 @@
                                 <textarea :value="templateData.htmlTemplate" @input="updateField('htmlTemplate', $event.target.value)" rows="22"
                                     class="w-full bg-white border-0 border-t border-gray-100 rounded-none px-4 py-3 text-gray-800 focus:ring-2 focus:ring-inset focus:ring-primary-500 focus:outline-none font-mono text-sm shadow-inner leading-relaxed resize-y min-h-[460px]" placeholder="<section>...</section>"></textarea>
                             </details>
+                            <div v-if="protocolCheck" aria-live="polite" class="rounded-xl border px-4 py-3 text-sm" :class="protocolCheck.ok ? 'border-emerald-200 bg-emerald-50/70 text-emerald-700' : 'border-rose-200 bg-rose-50/70 text-rose-700'">
+                                <div class="font-bold">{{ protocolCheck.ok ? protocolCheck.message : '模板协议检查未通过' }}</div>
+                                <div v-if="!protocolCheck.ok" class="mt-1 text-xs whitespace-pre-wrap break-words">{{ protocolCheck.message }}</div>
+                                <div v-else-if="protocolCheck.checks && protocolCheck.checks.length" class="mt-1 text-xs opacity-80">{{ protocolCheck.checks.join(' · ') }}</div>
+                            </div>
                             <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
                                 <div>
                                     <label class="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">变量JSON</label>
@@ -1906,7 +1974,21 @@
             'update:page', 'update:help-topic'
         ],
         setup() {
+            const formatDuration = (value) => {
+                if (!Number.isFinite(value)) return '--';
+                if (value < 1000) return `${Math.round(value)}ms`;
+                return `${Number((value / 1000).toFixed(1))}s`;
+            };
+            const formatOutputSpeed = (record) => {
+                if (record?.isStream !== true
+                    || !Number.isFinite(record?.durationMs) || record.durationMs <= 0
+                    || !Number.isFinite(record?.outputCharacters) || record.outputCharacters <= 0) return '--';
+                return `${Math.round(record.outputCharacters * 1000 / record.durationMs)}字/s`;
+            };
             return {
+                formatDuration,
+                formatOutputSpeed,
+                formatQuota: quota => `¥${(Math.trunc(quota / 500000 * 10000) / 10000).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`,
                 filterOptions: Object.freeze([
                     { value: 'all', label: '全部', position: '' },
                     { value: 'chat', label: '主对话', position: 'is-position-2' },
@@ -1966,14 +2048,14 @@
                     </div>
                 </div>
 
-                <div class="relative mb-6 flex items-center justify-between gap-4 rounded-2xl border border-primary-100 bg-white px-4 py-3.5 shadow-sm md:px-5">
-                    <div class="flex min-w-0 items-center text-base font-semibold text-gray-700"><span>总用量</span>
+                <div class="relative mb-6 flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white px-5 py-4 shadow-sm">
+                    <div class="flex min-w-0 items-center text-sm font-semibold text-gray-500"><span>总用量</span>
                         <settings-help topic="totalTokens" :open-topic="helpTopic" label="查看总用量说明" icon-class=""
                             popover-class="token-usage-help-popover" @toggle="$emit('update:help-topic', $event)">
                             汇总当前类型和时间筛选范围内，输入 Token（包括缓存读取）与输出 Token 的总和。
                         </settings-help>
                     </div>
-                    <span class="flex-none whitespace-nowrap text-xl font-semibold tabular-nums text-gray-800" style="font-family: 'Segoe UI Variable', 'Segoe UI', Arial, sans-serif">{{ formatAggregate(stats.inputTokens + stats.cacheReadTokens + stats.outputTokens, stats.inputTokensReports + stats.cacheReadTokensReports + stats.outputTokensReports) }}</span>
+                    <div class="flex-shrink-0 whitespace-nowrap font-mono text-xl font-bold tabular-nums text-gray-900">{{ formatAggregate(stats.inputTokens + stats.cacheReadTokens + stats.outputTokens, stats.inputTokensReports + stats.cacheReadTokensReports + stats.outputTokensReports) }}</div>
                 </div>
 
                 <div class="flex items-center justify-between mb-3">
@@ -1983,37 +2065,45 @@
                 <div v-if="records.length > 0" class="space-y-3">
                     <article v-for="record in records" :key="record.id"
                         class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition-colors hover:border-gray-300">
-                        <div class="mb-3 flex items-start gap-3">
-                            <div class="min-w-0 flex-1">
-                                <div class="flex min-w-0 items-center gap-2">
-                                    <span class="flex flex-shrink-0 items-center gap-1.5 text-sm font-semibold text-gray-600">
-                                        <span class="h-1.5 w-1.5 rounded-full bg-primary-400"></span>{{ getTypeLabel(record.type) }}
-                                    </span>
-                                    <span class="min-w-0 flex-1 truncate text-sm text-gray-600" :title="record.model">{{ record.model || '未知模型' }}</span>
-                                </div>
-                                <div v-if="record.characterName || record.detail" class="mt-1.5 min-w-0 truncate text-xs text-gray-400">
-                                    {{ [record.characterName, record.detail].filter(Boolean).join(' · ') }}
-                                </div>
+                        <div class="mb-3 min-w-0">
+                            <div class="flex min-w-0 items-center justify-between gap-3">
+                                <span class="min-w-0 flex-1 truncate text-sm text-gray-600" :title="record.model">{{ record.model || '未知模型' }}</span>
+                                 <span class="flex-shrink-0 text-sm font-semibold text-gray-500">{{ getTypeLabel(record.type) }}</span>
                             </div>
-                            <time class="flex-shrink-0 text-xs text-gray-400">{{ formatTime(record.timestamp) }}</time>
+                            <div class="mt-1.5 flex min-w-0 items-center justify-between gap-3">
+                                <div class="flex min-w-0 items-center gap-3 text-xs text-gray-400">
+                                    <span>耗时 {{ formatDuration(record.durationMs) }}</span>
+                                    <span v-if="record.isStream === true">速度 {{ formatOutputSpeed(record) }}</span>
+                                </div>
+                                <time class="flex-shrink-0 text-xs text-gray-400">{{ formatTime(record.timestamp) }}</time>
+                            </div>
                         </div>
-                        <div class="grid grid-cols-2 gap-2">
-                            <div class="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-3">
-                                <div class="flex items-center gap-1.5 text-xs font-medium text-gray-500"><span class="h-1.5 w-1.5 rounded-full bg-primary-500"></span>输入</div>
-                                <div class="mt-1.5 flex items-end gap-1 font-mono leading-none">
-                                    <span class="text-base font-bold text-gray-800">{{ formatCount(getUncachedInput(record)) }}</span>
+                        <div class="space-y-1.5 rounded-xl border border-gray-100 bg-gray-50/60 px-3 py-2.5">
+                            <div class="flex min-w-0 items-center justify-between gap-3 whitespace-nowrap">
+                                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-primary-500"></span>输入
+                                </span>
+                                <span class="flex min-w-0 items-center gap-1 font-mono">
+                                    <span class="text-sm font-bold text-gray-800">{{ formatCount(getUncachedInput(record)) }}</span>
                                     <span v-if="Number(record.cacheReadTokens) > 0"
-                                        class="inline-flex items-center gap-0.5 text-sm font-normal text-gray-500/80">
-                                        <svg class="h-3.5 w-3.5 flex-none" fill="none" stroke="currentColor" aria-hidden="true"><use href="#icon-arrow-down"></use></svg>
+                                        class="inline-flex min-w-0 items-center gap-0.5 text-sm font-bold text-gray-500/80"
+                                        title="缓存读取">
+                                        <svg class="h-4 w-4 flex-none" fill="none" stroke="currentColor" aria-hidden="true"><use href="#icon-arrow-down"></use></svg>
                                         {{ formatCount(record.cacheReadTokens) }}
                                     </span>
-                                </div>
+                                </span>
                             </div>
-                            <div class="rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-3">
-                                <div class="flex items-center gap-1.5 text-xs font-medium text-gray-500"><span class="h-1.5 w-1.5 rounded-full bg-yellow-400"></span>输出</div>
-                                <div class="mt-1.5 flex items-end gap-1 font-mono leading-none">
-                                    <span class="text-base font-bold text-gray-800">{{ formatCount(record.outputTokens) }}</span>
-                                </div>
+                            <div class="flex min-w-0 items-center justify-between gap-3 whitespace-nowrap">
+                                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-yellow-400"></span>输出
+                                </span>
+                                <span class="font-mono text-sm font-bold text-gray-800">{{ formatCount(record.outputTokens) }}</span>
+                            </div>
+                            <div v-if="Number.isFinite(record.actualQuota)" class="flex min-w-0 items-center justify-between gap-3 whitespace-nowrap">
+                                <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>消耗
+                                </span>
+                                <span class="font-mono text-sm font-bold text-gray-800" :title="record.usageGroup ? '计费分组：' + record.usageGroup : ''">{{ formatQuota(record.actualQuota) }}</span>
                             </div>
                         </div>
                     </article>
