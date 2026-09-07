@@ -17,6 +17,19 @@
     const readTextContent = value => Array.isArray(value)
         ? value.filter(part => !isNativeReasoningPart(part)).map(part => part?.text || part?.content || '').join('')
         : String(value || '');
+    const replyTool = {
+        type: 'function',
+        function: {
+            name: 'output_reply',
+            description: '将本次回复交给聊天界面显示。遵守现有输出规则，正文及需要附带的面板、图片标记、变量更新块等全部放入 content，不在普通消息中重复输出。检索工具返回结果后，只传新增回复内容。',
+            parameters: {
+                type: 'object',
+                properties: { content: { type: 'string', description: '本次回复的原文，保留原有格式；作为 JSON 字符串正确转义。' } },
+                required: ['content'],
+                additionalProperties: false
+            }
+        }
+    };
 
     // 超时按“多久没有响应”计算，持续输出的长回复不会因总时长被中断。
     const withApiResponse = async (options, read) => {
@@ -61,19 +74,108 @@
 
     const requestJson = options => withApiResponse(options, async response => parsePayload(await response.text(), response.status));
 
-    const requestChatCompletion = async (options) => {
+    const requestChatCompletionOnce = async (options, attempt) => {
         const startedAt = Date.now();
         const result = { content: '', reasoning: '', usage: null, finishReason: null, isStream: false };
         let receivedPayload = false;
         let pendingContent = '';
         let pendingReasoning = '';
+        const replyCall = { id: '', name: '', arguments: '' };
+        let plainContent = '';
+        let refusal = '';
+        let failure = null;
+        let replyPosition = null;
+        let replyClosed = false;
+        const invalidReply = () => new Error('输出正文工具的参数格式错误，应为仅含 content 字符串的 JSON 对象');
+        // 只解码已经收齐的字符串字符，JSON 外壳和未收齐的转义不会进入正文。
+        const readReplyDelta = () => {
+            if (replyCall.name !== replyTool.function.name || replyClosed) return '';
+            const source = replyCall.arguments;
+            if (replyPosition === null) {
+                const header = /^\s*\{\s*"content"\s*:\s*"/.exec(source);
+                if (!header) return '';
+                replyPosition = header[0].length;
+            }
+            let text = '';
+            let lastPosition = replyPosition;
+            while (replyPosition < source.length) {
+                const char = source[replyPosition];
+                if (char === '"') { replyPosition++; replyClosed = true; break; }
+                if (char.charCodeAt(0) < 32) throw invalidReply();
+                let size = 1;
+                if (char === '\\') {
+                    const escape = source[replyPosition + 1];
+                    if (!escape) break;
+                    if (escape === 'u') {
+                        const digits = source.slice(replyPosition + 2, replyPosition + 6);
+                        if (/[^\da-f]/i.test(digits)) throw invalidReply();
+                        if (digits.length < 4) break;
+                        size = 6;
+                    } else {
+                        if (!'"\\/bfnrt'.includes(escape)) throw invalidReply();
+                        size = 2;
+                    }
+                }
+                lastPosition = replyPosition;
+                text += size === 1 ? char : JSON.parse('"' + source.slice(replyPosition, replyPosition + size) + '"');
+                replyPosition += size;
+            }
+            if (!replyClosed && /[\uD800-\uDBFF]$/.test(text)) {
+                replyPosition = lastPosition;
+                text = text.slice(0, -1);
+            }
+            return text;
+        };
+        const finish = () => {
+            if (!options.replyInTool) return result;
+            if (result.finishReason === 'content_filter' || refusal.trim()) throw new Error('API 已停止工具输出');
+            if (replyCall.name === replyTool.function.name && replyCall.arguments.trim()) {
+                let payload;
+                try { payload = JSON.parse(replyCall.arguments); }
+                catch (_) {
+                    if (replyPosition === null || (replyClosed && replyCall.arguments.slice(replyPosition).trim())) throw invalidReply();
+                    // 容忍末尾缺失的 JSON 闭合符号，保留已经解码的正文。
+                }
+                if (payload !== undefined) {
+                    if (!payload || typeof payload.content !== 'string' || Object.keys(payload).length !== 1
+                        || !payload.content.startsWith(result.content)) throw invalidReply();
+                    pendingContent += payload.content.slice(result.content.length);
+                    result.content = payload.content;
+                }
+            }
+            // 响应结束后才选普通正文兜底，避免与稍后到来的工具正文重复。
+            if (!result.content.trim()) {
+                if (!plainContent.trim()) {
+                    throw Object.assign(new Error('API 未返回抗截断输出，可能触发了空回或站点不支持，请重新尝试。'), {
+                        // 已有思考或工具调用时不算真正空回，也不重试。
+                        retryableEmptyToolReply: !replyCall.id && !replyCall.name
+                            && !replyCall.arguments && !result.reasoning.trim()
+                    });
+                }
+                pendingContent += plainContent;
+                result.content += plainContent;
+            }
+            return result;
+        };
         const accept = data => {
             receivedPayload = true;
             result.usage = getApiUsagePayload(data) || result.usage;
             const choice = data.choices?.[0] || {};
             const message = choice.delta || choice.message || {};
-            const content = readTextContent(message.content ?? choice.text);
+            let content = readTextContent(message.content ?? choice.text);
             const reasoning = extractNativeReasoning(message) || extractNativeReasoning(choice) || '';
+            if (options.replyInTool) {
+                plainContent += content;
+                refusal += readTextContent(message.refusal);
+                for (const call of message.tool_calls || []) {
+                    if ((call.index ?? 0) !== 0 || (call.type && call.type !== 'function')
+                        || (call.id && replyCall.id && call.id !== replyCall.id)) throw invalidReply();
+                    replyCall.id = call.id || replyCall.id;
+                    replyCall.name += call.function?.name || '';
+                    replyCall.arguments += call.function?.arguments || '';
+                }
+                content = readReplyDelta();
+            }
             result.content += content;
             result.reasoning += reasoning;
             result.finishReason = choice.finish_reason ?? result.finishReason;
@@ -84,6 +186,11 @@
             return await withApiResponse({ ...options, body: {
                 model: options.model, messages: options.messages, temperature: options.temperature,
                 ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+                ...(options.replyInTool ? {
+                    tools: [replyTool],
+                    tool_choice: { type: 'function', function: { name: replyTool.function.name } },
+                    parallel_tool_calls: false
+                } : {}),
                 stream: !!options.stream,
                 ...(options.stream ? { stream_options: { include_usage: true } } : {})
             } }, async (response, touch) => {
@@ -93,7 +200,7 @@
                     rawText = await response.text();
                     if (!/^\s*(?:data:|:)/.test(rawText)) {
                         accept(parsePayload(rawText, response.status));
-                        return result;
+                        return finish();
                     }
                 }
                 result.isStream = !!options.stream;
@@ -113,7 +220,10 @@
                     if (!eventLines.length) return;
                     const payload = eventLines.join('\n');
                     eventLines = [];
-                    if (payload.trim() === '[DONE]') { done = true; return; }
+                    if (payload.trim() === '[DONE]') {
+                        done = true;
+                        return;
+                    }
                     if (payload.trim()) accept(parsePayload(payload, response.status));
                 };
                 const readLine = line => {
@@ -149,7 +259,7 @@
                     // 兼容缺失最后换行的完整 JSON；损坏 JSON 必须报错，不能伪装成功。
                     if (!done) { readLine(buffer.replace(/\r$/, '')); dispatch(); }
                     if (!receivedPayload) throw new Error('API 未返回有效的模型响应');
-                    return result;
+                    return finish();
                 } finally {
                     clearInterval(interval);
                     if (reader) {
@@ -160,12 +270,28 @@
                     await flushPromise;
                 }
             });
+        } catch (error) {
+            failure = error;
+            throw error;
         } finally {
+            if (options.replyInTool) console.info('[抗Gemini截断]', {
+                模型: options.model, 次数: attempt, 结果: failure ? failure.message : '成功',
+                结束原因: result.finishReason, 正文全文: result.content, 普通正文全文: plainContent
+            });
             // 在业务层 JSON/模板校验之前记账；部分流式响应后中止也不会漏掉已返回的用量。
             if (receivedPayload) options.onUsage?.(result.usage, {
                 isStream: result.isStream, durationMs: Date.now() - startedAt,
-                outputCharacters: result.content.length + result.reasoning.length
+                outputCharacters: (options.replyInTool ? replyCall.arguments.length + plainContent.length : result.content.length) + result.reasoning.length
             });
+        }
+    };
+
+    const requestChatCompletion = async options => {
+        for (let attempt = 1; ; attempt++) {
+            try { return await requestChatCompletionOnce(options, attempt); }
+            catch (error) {
+                if (!error.retryableEmptyToolReply || attempt >= 3 || options.signal?.aborted) throw error;
+            }
         }
     };
 
