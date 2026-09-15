@@ -1,7 +1,7 @@
 const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } = Vue;
 const { useStorageManagement, useTokenUsage } = window.RPHubComposables;
 const { createMessageRenderer } = window.RPHubMessageRenderer;
-const { AppSidebar } = window.RPHubLayoutComponents;
+const { AppNavigation } = window.RPHubLayoutComponents;
 const { requestChatCompletion, requestJson } = window.RPHubApiClient;
 const { buildApiEndpoint } = window.RPHubApiUtils;
 const {
@@ -47,33 +47,19 @@ const {
     stringifyErrorDetail
 } = window.RPHubUtils;
 const {
-    buildMergedVectorMemoryFallbackText,
+    buildSummaryEmbeddingText,
     cosineSimilarity,
-    extractStoryTime,
-    extractVectorQueryTerms,
     getClassicMemoryKey,
-    getVectorMemoryContentFingerprint,
-    getVectorMemoryFingerprint,
-    getVectorMemoryText,
-    getVectorLexicalMatch,
-    isEmbeddingLike,
-    isEnabledVectorMemory,
-    isVectorMemory,
+    getSummaryEmbedding,
+    getSummarySources,
     markRuntimeRaw,
-    mergeSmallMemoryParagraphs,
     normalizeEmbedding,
-    normalizeStoryTime,
     prepareClassicMemoriesForRuntime,
-    prepareMemoryForRuntime,
-    prepareMemoriesForRuntime,
     quantizeEmbeddingForStorage,
-    splitLongMemoryParagraph,
-    splitMemoryParagraphs,
-    sortVectorMemoriesByTime,
-    stripStoryTimeLine,
     trimMemoryText
 } = window.RPHubMemoryUtils;
 const {
+    appendEnhancedMemoryRecall,
     buildContextViewerState,
     buildConversationTurnSnapshot: createConversationTurnSnapshot,
     escapeXmlAttribute,
@@ -180,7 +166,7 @@ const app = createApp({
         ActionConfirmModal,
         ActiveToolEditorModal,
         AddCharacterModal,
-        AppSidebar,
+        AppNavigation,
         AutoImageGenModal,
         CharacterExportModal,
         CharacterEditorModal,
@@ -226,14 +212,13 @@ const app = createApp({
         } = uiOptions;
         const ACTIVE_TOOL_KEYWORD_TYPE = activeToolConfig.types.keyword;
         const ACTIVE_TOOL_WEB_TYPE = activeToolConfig.types.web;
+        const ACTIVE_TOOL_RANDOM_TYPE = activeToolConfig.types.random;
         const ACTIVE_TOOL_MIN_RESULT_COUNT = activeToolConfig.resultCount.min;
         const ACTIVE_TOOL_DEFAULT_RESULT_COUNT = activeToolConfig.resultCount.default;
         const ACTIVE_TOOL_MAX_RESULT_COUNT = activeToolConfig.resultCount.max;
         const ACTIVE_TOOL_RESULT_COUNT_VERSION = activeToolConfig.resultCount.version;
         const ACTIVE_TOOL_MAX_AUTO_CONTINUE = activeToolConfig.maxAutoContinue;
-        const ACTIVE_TOOL_AGGRESSIVENESS_ACTIVE = activeToolConfig.aggressiveness.active;
         const ACTIVE_TOOL_AGGRESSIVENESS_ADAPTIVE = activeToolConfig.aggressiveness.adaptive;
-        const ACTIVE_TOOL_AGGRESSIVENESS_VERSION = activeToolConfig.aggressiveness.version;
         const ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS = activeToolConfig.aggressiveness.options;
         const ACTIVE_TOOL_REMINDERS = activeToolConfig.aggressiveness.reminders;
         const ACTIVE_TOOL_TAVILY_ENDPOINT = activeToolConfig.tavily.searchEndpoint;
@@ -271,26 +256,7 @@ const app = createApp({
         };
 
         const currentView = ref('chat');
-        let isMobileSidebarOpen = false;
-        const isSidebarCollapsed = ref(false);
-        const isOnlineNavOpen = ref(false);
-        const toggleOnlineNav = () => {
-            if (isSidebarCollapsed.value) {
-                isSidebarCollapsed.value = false;
-                isOnlineNavOpen.value = true;
-                return;
-            }
-            isOnlineNavOpen.value = !isOnlineNavOpen.value;
-        };
-        const isAdvancedNavOpen = ref(false);
-        const toggleAdvancedNav = () => {
-            if (isSidebarCollapsed.value) {
-                isSidebarCollapsed.value = false;
-                isAdvancedNavOpen.value = true;
-                return;
-            }
-            isAdvancedNavOpen.value = !isAdvancedNavOpen.value;
-        };
+        const isNavigationOpen = ref(false);
         const showDescriptionPanel = ref(false);
         const showModelSelector = ref(false);
         const modelSelectionTarget = ref('model');
@@ -443,19 +409,12 @@ const app = createApp({
             || window.innerWidth <= 768
         );
 
-        const setMobileSidebarOpen = (open) => {
-            const shouldOpen = !!open && isMobileViewport();
-            isMobileSidebarOpen = shouldOpen;
-            document.querySelector('.app-sidebar')?.classList.toggle('mobile-sidebar-open', shouldOpen);
-            document.querySelector('.mobile-overlay')?.classList.toggle('mobile-sidebar-open', shouldOpen);
+        const toggleNavigation = () => {
+            isNavigationOpen.value = !isNavigationOpen.value;
         };
 
-        const toggleMobileMenu = () => {
-            setMobileSidebarOpen(!isMobileSidebarOpen);
-        };
-
-        const closeMobileMenu = () => {
-            setMobileSidebarOpen(false);
+        const closeNavigation = () => {
+            isNavigationOpen.value = false;
         };
 
         const applyMobileVisualViewportHeight = (height, { force = false } = {}) => {
@@ -489,7 +448,7 @@ const app = createApp({
 
         const syncMobileVisualViewport = ({ force = false } = {}) => {
             if (!isMobileViewport()) {
-                closeMobileMenu();
+                closeNavigation();
                 isMobileKeyboardOpen.value = false;
                 lastAppliedMobileViewportHeight = 0;
                 lastAppliedMobileKeyboardInset = 0;
@@ -612,7 +571,6 @@ const app = createApp({
             reasoningEffort: '',
             stream: true,
             activeToolAggressiveness: 'adaptive',
-            activeToolAggressivenessVersion: 2,
 
             useCharacterBackground: true,
             immersiveMode: false,
@@ -1027,10 +985,7 @@ const app = createApp({
             return presetRoleDisplayLabels[role] || '系统';
         };
         const getPresetRoleBadgeClass = (preset) => {
-            const role = normalizePresetRole(preset?.role);
-            if (role === 'user') return 'bg-green-100 text-green-700 border-green-200';
-            if (role === 'assistant') return 'bg-purple-100 text-purple-700 border-purple-200';
-            return 'bg-red-100 text-red-700 border-red-200';
+            return `meta-badge--${normalizePresetRole(preset?.role)}`;
         };
         const blockedStyleSentencePattern = /[^。！？!?\n]*(?:不容置疑|(?:不易|难以)(?:察觉|觉察)|(?:微|几)不可察|一抹|弧度|生理性|微微泛|因为用力|像在|风箱|手术刀|上扬|带着一种|语气很平|声音很平|(?:指尖|指节|指关节)[^。！？!?\n]*(?:发白|泛白)|像(?:是)?[^。！？!?\n]*?[，,]\s*又像(?:是)?|不是[^。！？!?\n]*?(?:而是|就是|[，,]\s*(?:是|(?:更|倒|反倒)?像是)))[^。！？!?\n]*(?:[。！？!?]+[”’」』】）)]*(?:\*\*|__)?)?/g;
         const standaloneWordCountSentencePattern = /(^|[。！？!?\n]+[”’」』】）)]*)[ \t]*(?:\*\*|__)?(?:\d+|[零〇一二两三四五六七八九十百千万]+)个字[^。！？!?\n]*(?:[。！？!?]+[”’」』】）)]*(?:\*\*|__)?)?/gm;
@@ -1158,29 +1113,20 @@ const app = createApp({
         const currentWaitTime = ref('0.0');
         let waitTimer = null;
         // --- Memory System State ---
-        const MEMORY_VECTOR_BATCH_SIZE = 16;
-        const MEMORY_VECTOR_SAVE_EVERY_BATCHES = 4;
-        const MEMORY_VECTOR_MERGE_MAX_LENGTH = 400;
-        const MEMORY_VECTOR_MIN_TOP_K = 10;
-        const MEMORY_VECTOR_MAX_TOP_K = 20;
-        const MEMORY_VECTOR_DEFAULT_TOP_K = 10;
-        const MEMORY_VECTOR_SIMILARITY_THRESHOLD = 45;
-        const MEMORY_VECTOR_DEFAULT_DEPTH = 1;
+        const SUMMARY_EMBEDDING_BATCH_SIZE = 16;
+        const SUMMARY_RECALL_LIMIT = 10;
+        const SUMMARY_RECALL_MIN_SIMILARITY = 0.48;
         const CLASSIC_MEMORY_MIN_CONCURRENCY = 1;
         const CLASSIC_MEMORY_MAX_CONCURRENCY = 10;
         const CLASSIC_MEMORY_DEFAULT_CONCURRENCY = 5;
         const CLASSIC_SECONDARY_KEEP_TURNS = 25;
         const CLASSIC_SECONDARY_GROUP_SIZE = 5;
-        const MEMORY_MODE_VECTOR = 'vector';
+        const MEMORY_MODE_ENHANCED = 'enhanced';
         const MEMORY_MODE_CLASSIC = 'classic';
-        const VECTOR_KEEP_FLOORS_MIN = 30;
-        const VECTOR_KEEP_FLOORS_MAX = 80;
-        const VECTOR_KEEP_FLOORS_DEFAULT = 50;
         const SUMMARY_KEEP_FLOORS_MIN = 10;
         const SUMMARY_KEEP_FLOORS_MAX = 40;
         const SUMMARY_KEEP_FLOORS_DEFAULT = 20;
         const LIST_PAGE_SIZE = 10;
-        const memories = ref([]);
         const classicMemories = ref([]);
         const classicMemoryPage = ref(1);
         const memorySettings = reactive({
@@ -1188,24 +1134,13 @@ const app = createApp({
             mode: MEMORY_MODE_CLASSIC,
             embeddingModel: '',
             classicModel: '',
-            vectorTopK: MEMORY_VECTOR_DEFAULT_TOP_K,
-            vectorKeepFloors: VECTOR_KEEP_FLOORS_DEFAULT,
             summaryKeepFloors: SUMMARY_KEEP_FLOORS_DEFAULT,
             classicConcurrency: CLASSIC_MEMORY_DEFAULT_CONCURRENCY
         });
-        const isBatchExtracting = ref(false);
-        const batchExtractProgress = ref({ current: 0, total: 0 });
-        const vectorMemorySearchQuery = ref('');
-        const vectorMemorySearchResults = ref([]);
-        const vectorMemorySearchError = ref('');
-        const vectorMemorySearchSortMode = ref('time');
-        const isVectorMemorySearching = ref(false);
         const isClassicBatchExtracting = ref(false);
         const classicBatchExtractProgress = ref({ current: 0, total: 0 });
         const retryingClassicMemoryId = ref('');
-        let _vectorMemorySearchAbort = null;
         let _isApplyingCharacterScopedData = false;
-        let _memoriesLoaded = false; // 标志：防止在记忆加载前 saveData 覆盖已存数据
         let _classicMemoriesLoaded = false;
         let _characterSwitchEpoch = 0;
         let _characterSwitchSavePromise = Promise.resolve();
@@ -1229,13 +1164,8 @@ const app = createApp({
         );
         const getActiveToolLatestUserReminder = () => ACTIVE_TOOL_REMINDERS[getActiveToolAggressiveness()];
         const normalizeActiveToolAggressivenessSettings = () => {
-            const aggressivenessVersion = Number(settings.activeToolAggressivenessVersion) || 1;
             settings.activeToolAggressiveness = normalizeActiveToolAggressiveness(settings.activeToolAggressiveness);
-            if (aggressivenessVersion < ACTIVE_TOOL_AGGRESSIVENESS_VERSION
-                && settings.activeToolAggressiveness === ACTIVE_TOOL_AGGRESSIVENESS_ACTIVE) {
-                settings.activeToolAggressiveness = ACTIVE_TOOL_AGGRESSIVENESS_ADAPTIVE;
-            }
-            settings.activeToolAggressivenessVersion = ACTIVE_TOOL_AGGRESSIVENESS_VERSION;
+            delete settings.activeToolAggressivenessVersion;
         };
         const activeTools = ref(getDefaultActiveToolDefinitions());
 
@@ -1255,21 +1185,15 @@ const app = createApp({
             if (!memorySettings.classicModel && memorySettings.model) {
                 memorySettings.classicModel = String(memorySettings.model).trim();
             }
-            ['model', 'autoExtract', 'keepFloors', 'similarityThreshold', 'summaryLevel', 'defaultDepth', `re${'rankEnabled'}`, `re${'rankModel'}`].forEach(key => {
-                delete memorySettings[key];
+            const fields = new Set(['enabled', 'mode', 'embeddingModel', 'classicModel', 'summaryKeepFloors', 'classicConcurrency']);
+            Object.keys(memorySettings).forEach(key => {
+                if (!fields.has(key)) delete memorySettings[key];
             });
-            memorySettings.mode = memorySettings.mode === MEMORY_MODE_CLASSIC
-                ? MEMORY_MODE_CLASSIC
-                : memorySettings.mode === MEMORY_MODE_VECTOR
-                    ? MEMORY_MODE_VECTOR
-                    : MEMORY_MODE_CLASSIC;
+            // 只迁移旧模式选择，不读取旧分片。
+            memorySettings.mode = [MEMORY_MODE_ENHANCED, 'vector'].includes(memorySettings.mode)
+                ? MEMORY_MODE_ENHANCED : MEMORY_MODE_CLASSIC;
             memorySettings.classicModel = String(memorySettings.classicModel || '').trim();
-            memorySettings.vectorKeepFloors = normalizeKeepFloors(
-                memorySettings.vectorKeepFloors,
-                VECTOR_KEEP_FLOORS_MIN,
-                VECTOR_KEEP_FLOORS_MAX,
-                VECTOR_KEEP_FLOORS_DEFAULT
-            );
+            memorySettings.embeddingModel = String(memorySettings.embeddingModel || '').trim();
             memorySettings.summaryKeepFloors = normalizeKeepFloors(
                 memorySettings.summaryKeepFloors,
                 SUMMARY_KEEP_FLOORS_MIN,
@@ -1277,10 +1201,6 @@ const app = createApp({
                 SUMMARY_KEEP_FLOORS_DEFAULT
             );
             memorySettings.classicConcurrency = normalizeClassicMemoryConcurrency(memorySettings.classicConcurrency);
-            const vectorTopK = Number(memorySettings.vectorTopK);
-            memorySettings.vectorTopK = Number.isFinite(vectorTopK)
-                ? Math.max(MEMORY_VECTOR_MIN_TOP_K, Math.min(MEMORY_VECTOR_MAX_TOP_K, vectorTopK))
-                : MEMORY_VECTOR_DEFAULT_TOP_K;
         };
 
         const normalizeActiveToolCallName = (value) => {
@@ -1312,6 +1232,7 @@ const app = createApp({
                 .find(item => item.id === (isLegacyWebTool ? 'tool_web' : tool.id) || item.callName === callName);
             if (!defaultTool) return null;
             const fallback = defaultTool;
+            if (fallback.type === ACTIVE_TOOL_RANDOM_TYPE) return { ...fallback, enabled: tool.enabled !== false };
             const normalizedCallName = fallback.callName;
             const resultCountVersion = Number(tool.resultCountVersion) || 1;
             const normalizedType = fallback.type;
@@ -1369,44 +1290,6 @@ const app = createApp({
             return normalized;
         };
 
-        const getMemoryEmptyTurnsKey = (uuid) => {
-            const safeUuid = uuid || 'global';
-            return `${safeUuid}:vector`;
-        };
-
-        const compactMemoryForStorage = (memory) => {
-            if (!memory || typeof memory !== 'object') return memory;
-            const {
-                embedding,
-                vectorRawScore,
-                vectorScore,
-                vectorLexicalHits,
-                vectorLexicalTerms,
-                vectorSearchScore,
-                depth,
-                ...cleanMemory
-            } = unwrapForStorage(memory);
-
-            if (typeof cleanMemory.embeddingQ === 'string' && cleanMemory.embeddingQ.length > 0) {
-                return cleanMemory;
-            }
-
-            const packed = quantizeEmbeddingForStorage(embedding);
-            return packed ? { ...cleanMemory, ...packed } : cleanMemory;
-        };
-
-        const yieldMemoryStorageWork = () => new Promise(resolve => setTimeout(resolve, 0));
-
-        const compactMemoriesForStorageAsync = async (items) => {
-            if (!Array.isArray(items)) return [];
-            const result = [];
-            for (let i = 0; i < items.length; i++) {
-                result.push(compactMemoryForStorage(items[i]));
-                if (i > 0 && i % 256 === 0) await yieldMemoryStorageWork();
-            }
-            return result;
-        };
-
         const estimatedGenerationTime = computed(() => {
             if (recentGenerationTimes.value.length === 0) return null;
             const total = recentGenerationTimes.value.reduce((sum, item) => {
@@ -1461,7 +1344,7 @@ const app = createApp({
         ));
         const lastContextFloorCount = computed(() => lastContextMessages.value
             .filter(message => Number.isFinite(message?.floor)).length);
-        const CHARACTER_SCOPED_STORAGE_NAMES = ['chat', 'memories', 'classic_memories', 'branches'];
+        const CHARACTER_SCOPED_STORAGE_NAMES = ['chat', 'classic_memories', 'branches'];
         const {
             clearTokenUsageHistory,
             displayedTokenUsageHistory,
@@ -1523,9 +1406,7 @@ const app = createApp({
             getMainDb,
             getStorageLogicalKey,
             globalUiTemplates,
-            memorySettings,
             readStorageKeys,
-            saveMemorySettings: () => saveMemorySettingsNow(),
             saveStoredValue: setStoredValue,
             scanStorageEntries,
             scopedStorageNames: CHARACTER_SCOPED_STORAGE_NAMES,
@@ -1586,15 +1467,34 @@ const app = createApp({
             isNovelLoading.value = false;
         };
 
+        // 排序只改变位置，不改变条目的渲染身份，也不向导出数据添加内部字段。
+        const sortableItemKeys = new WeakMap();
+        let sortableItemSequence = 0;
+        const getSortableItemKey = (item) => {
+            if (!sortableItemKeys.has(item)) sortableItemKeys.set(item, ++sortableItemSequence);
+            return sortableItemKeys.get(item);
+        };
+        let activeSortable = null;
         const initializeSortableList = (elementId, items) => {
             nextTick(() => {
                 const element = document.getElementById(elementId);
                 if (!element || typeof Sortable === 'undefined') return;
-                new Sortable(element, {
-                    handle: '.cursor-move',
-                    animation: 150,
-                    onEnd: ({ oldIndex, newIndex }) => {
-                        const movedElement = element.children[newIndex];
+                activeSortable?.destroy();
+                activeSortable = new Sortable(element, {
+                    handle: '.sortable-list-handle',
+                    draggable: '.sortable-list-item',
+                    direction: 'vertical',
+                    animation: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260,
+                    easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+                    forceFallback: true,
+                    fallbackOnBody: true,
+                    fallbackTolerance: 4,
+                    ghostClass: 'sortable-list-placeholder',
+                    chosenClass: 'sortable-list-chosen',
+                    fallbackClass: 'sortable-list-preview',
+                    onEnd: ({ item: movedElement, oldIndex, newIndex }) => {
+                        if (!Number.isInteger(oldIndex) || !Number.isInteger(newIndex) || oldIndex === newIndex) return;
+                        // 先还原 Sortable 移动过的 DOM，再让 Vue 按稳定 key 更新顺序。
                         element.insertBefore(
                             movedElement,
                             element.children[oldIndex < newIndex ? oldIndex : oldIndex + 1]
@@ -1609,6 +1509,8 @@ const app = createApp({
 
         // Watch view change to refresh embedded pages and sortable lists
         watch(currentView, (newView) => {
+            activeSortable?.destroy();
+            activeSortable = null;
             settingsHelpTopic.value = '';
             if (newView === 'characters') {
                 characterGridView.value = false;
@@ -1719,15 +1621,6 @@ const app = createApp({
             await setStoredValue('memory_settings', cloneForStorage(memorySettings), { clone: false });
         };
 
-        const saveMemoriesNow = async (
-            storyScopeId = getCurrentStoryBranchScopeId(),
-            memorySource = memories.value
-        ) => {
-            if (!storyScopeId || (!_memoriesLoaded && memorySource === memories.value)) return;
-            if (!getMainDb()) await initDB();
-            await setScopedStoredValue('memories', storyScopeId, await compactMemoriesForStorageAsync(memorySource), { clone: false });
-        };
-
         const saveClassicMemoriesNow = async (
             storyScopeId = getCurrentStoryBranchScopeId(),
             memorySource = classicMemories.value
@@ -1774,7 +1667,6 @@ const app = createApp({
                 // Save Memory State
                 await saveMemorySettingsNow();
                 if (saveMemories) {
-                    await saveMemoriesNow();
                     await saveClassicMemoriesNow();
                 }
             } catch (e) {
@@ -1789,14 +1681,12 @@ const app = createApp({
             try {
                 const storyScopeId = getCurrentStoryBranchScopeId();
                 const historySource = chatHistory.value;
-                const vectorMemorySource = memories.value;
                 const classicMemorySource = classicMemories.value;
                 if (saveTemplateRuntime) {
                     saveGlobalUiTemplateRuntimeForCharacter(currentCharacter.value, activeStoryBranchId.value);
                 }
                 if (!getMainDb()) await initDB();
                 await saveChatHistoryNow(storyScopeId, historySource);
-                await saveMemoriesNow(storyScopeId, vectorMemorySource);
                 await saveClassicMemoriesNow(storyScopeId, classicMemorySource);
                 if (saveTemplateRuntime) {
                     await saveCharactersNow();
@@ -2373,12 +2263,6 @@ const app = createApp({
 
         watch(() => settings.imageGenCount, () => {
             enforceSpecialRules();
-        });
-
-        const isDesktopSidebarViewport = () => window.matchMedia('(min-width: 768px)').matches;
-        watch(() => settings.immersiveMode, (enabled) => {
-            if (!isDesktopSidebarViewport()) return;
-            isSidebarCollapsed.value = !!enabled;
         });
 
         // Debounce function
@@ -3088,7 +2972,12 @@ const app = createApp({
             classicMemories.value.filter(memory => memory.enabled !== false).forEach(memory => {
                 if (isSecondaryClassicMemory(memory)) {
                     (memory.sourceAssistantIds || []).forEach(id => secondaryByAssistantId.set(id, memory));
-                    secondaryRanges.push({ memory, ...getClassicMemoryTurnRange(memory) });
+                    secondaryRanges.push({
+                        memory, ...getClassicMemoryTurnRange(memory),
+                        turns: memory.sourceMemories?.length
+                            ? new Set(memory.sourceMemories.map(source => Number(source.turn)))
+                            : null
+                    });
                     return;
                 }
                 (memory.sourceAssistantIds || []).forEach(id => byAssistantId.set(id, memory));
@@ -3110,13 +2999,14 @@ const app = createApp({
                 .map(index => chatHistory.value[index]?.id)
                 .filter(Boolean);
             return sourceIds.map(id => lookup.secondaryByAssistantId.get(id)).find(Boolean)
-                || lookup.secondaryRanges.find(range => turnInfo.turn >= range.start && turnInfo.turn <= range.end)?.memory;
+                || lookup.secondaryRanges.find(range => range.turns
+                    ? range.turns.has(turnInfo.turn)
+                    : turnInfo.turn >= range.start && turnInfo.turn <= range.end)?.memory;
         };
 
         const summaryCompressedBodyLength = computed(() => {
             let predictedLength = conversationBodyLength.value;
             if (!memorySettings.enabled
-                || memorySettings.mode !== MEMORY_MODE_CLASSIC
                 || classicMemories.value.length === 0) return predictedLength;
 
             const messages = getPostprocessedChatMessages(chatHistory.value, { includeSystem: false });
@@ -3808,7 +3698,6 @@ const app = createApp({
                         content: currentCharacter.value.first_mes
                     });
                 }
-                memories.value = [];
                 classicMemories.value = [];
                 resetUiTemplateRuntimeState();
                 saveData();
@@ -3840,7 +3729,7 @@ const app = createApp({
                     showToast('当前浏览器不支持全屏', 'warning');
                     return;
                 }
-                closeMobileMenu();
+                closeNavigation();
                 isChatFullscreen.value = true;
                 await requestNativeFullscreen(fullscreenTarget);
             } catch (err) {
@@ -3916,9 +3805,7 @@ const app = createApp({
                     (turnInfo.sourceIndexes || []).includes(index)
                 )?.turn || null;
                 syncMemoryConversationBindings(snapshot, { backfill: true });
-                await removeVectorMemoriesForConversationTurn(snapshot, affectedTurn);
                 await removeClassicMemoriesForConversationTurn(snapshot, affectedTurn);
-                clearCurrentVectorEmptyTurns();
                 await saveConversationMutationNow();
                 await saveMemorySettingsNow();
                 if (affectedTurn && memorySettings.enabled) {
@@ -4147,24 +4034,6 @@ const app = createApp({
 
 
 
-        const filterMemoriesAsync = async (keepMemory) => {
-            const source = Array.isArray(memories.value) ? memories.value : [];
-            const kept = [];
-            let removed = 0;
-
-            for (let i = 0; i < source.length; i++) {
-                if (keepMemory(source[i], i)) {
-                    kept.push(source[i]);
-                } else {
-                    removed++;
-                }
-                if (i > 0 && i % 512 === 0) await yieldToUi();
-            }
-
-            memories.value = kept;
-            return removed;
-        };
-
         const filterClassicMemoriesAsync = async (keepMemory) => {
             const source = Array.isArray(classicMemories.value) ? classicMemories.value : [];
             const kept = [];
@@ -4176,19 +4045,6 @@ const app = createApp({
             }
             classicMemories.value = kept;
             return removed;
-        };
-
-        const removeVectorMemoriesForConversationTurn = async (snapshot, turn) => {
-            if (!Number.isFinite(turn) || turn <= 0) return 0;
-            const turnInfo = snapshot?.turns?.find(item => item.turn === turn);
-            const sourceIds = new Set((turnInfo?.sourceIndexes || [])
-                .map(index => chatHistory.value[index]?.id)
-                .filter(Boolean));
-            return filterMemoriesAsync(memory => {
-                const memorySourceIds = [...(memory.sourceUserIds || []), ...(memory.sourceAssistantIds || [])];
-                const matchesSource = memorySourceIds.some(id => sourceIds.has(id));
-                return !matchesSource && Number(memory.turn) !== turn;
-            });
         };
 
         const removeClassicMemoriesForConversationTurn = async (snapshot, turn) => {
@@ -4222,27 +4078,7 @@ const app = createApp({
                 messageIds.forEach(id => turnByMessageId.set(id, Number(turnInfo.turn)));
             });
 
-            memories.value.forEach(memory => {
-                if (!isVectorMemory(memory)) return;
-                if (backfill && !(memory.sourceUserIds || []).length && !(memory.sourceAssistantIds || []).length) {
-                    const sources = sourcesByTurn.get(Number(memory.turn));
-                    if (sources) {
-                        memory.sourceUserIds = sources.userIds;
-                        memory.sourceAssistantIds = sources.assistantIds;
-                    }
-                }
-                const sourceIds = (memory.sourceAssistantIds || []).length
-                    ? memory.sourceAssistantIds
-                    : (memory.sourceUserIds || []);
-                const liveTurn = sourceIds.map(id => turnByMessageId.get(id)).find(Number.isFinite);
-                if (!Number.isFinite(liveTurn) || Number(memory.turn) === liveTurn) return;
-                memory.turn = liveTurn;
-                memory.sourceText = String(memory.sourceText || '').replace(/^第\s*\d+\s*轮/, `第 ${liveTurn} 轮`);
-                if (memory.vectorChunkId) {
-                    memory.vectorChunkId = String(memory.vectorChunkId).replace(/^[^:]+:/, `${liveTurn}:`);
-                }
-            });
-            classicMemories.value.forEach(memory => {
+            classicMemories.value.flatMap(memory => [memory, ...(memory.sourceMemories || [])]).forEach(memory => {
                 if (backfill && !(memory.sourceUserIds || []).length && !(memory.sourceAssistantIds || []).length) {
                     const sources = sourcesByTurn.get(Number(memory.turn));
                     if (sources) {
@@ -4275,11 +4111,6 @@ const app = createApp({
                 button.classList.remove('is-tapped');
                 button.blur();
             }, 280);
-        };
-
-        const clearCurrentVectorEmptyTurns = () => {
-            const key = getMemoryEmptyTurnsKey(getCurrentStoryBranchScopeId());
-            if (key && memorySettings.emptyTurns?.[key]?.length) memorySettings.emptyTurns[key] = [];
         };
 
         const removeClassicMemoriesFromTurn = (firstRemovedTurn) => {
@@ -4317,14 +4148,12 @@ const app = createApp({
                 const nextHistory = chatHistory.value.filter((_, messageIndex) => !removedIndexes.has(messageIndex));
                 const uiCleanup = pruneUiTemplateChangesFromTurn(affectedTurn);
                 if (affectedTurn) {
-                    await removeVectorMemoriesForConversationTurn(snapshot, affectedTurn);
                     await removeClassicMemoriesForConversationTurn(snapshot, affectedTurn);
                 }
                 chatHistory.value = nextHistory;
                 restoreSecondaryClassicMemoriesForTurnCount(
                     buildConversationTurnSnapshot(nextHistory, { includeSystem: false }).turns.length
                 );
-                clearCurrentVectorEmptyTurns();
                 await saveConversationMutationNow({ saveTemplateRuntime: uiCleanup.logs > 0 || uiCleanup.blocks > 0 });
                 await saveMemorySettingsNow();
                 const deletedLabel = deletesUserTurn ? '该轮次' : 'AI 消息';
@@ -4353,10 +4182,8 @@ const app = createApp({
                 const snapshot = await ensureConversationMessageIds();
                 syncMemoryConversationBindings(snapshot, { backfill: true });
                 const currentTurn = snapshot.turns.length;
-                await filterMemoriesAsync(m => (m.turn || 0) < currentTurn);
                 removeClassicMemoriesFromTurn(currentTurn);
-                clearCurrentVectorEmptyTurns();
-                await Promise.all([saveMemoriesNow(), saveClassicMemoriesNow(), saveMemorySettingsNow()]);
+                await Promise.all([saveClassicMemoriesNow(), saveMemorySettingsNow()]);
                 await generateResponse(startTime, { reuseGeneratingState: true });
             } else {
                 // 如果是 AI 消息，删除它（及之后）然后重新生成
@@ -4368,7 +4195,6 @@ const app = createApp({
                     syncMemoryConversationBindings(snapshot, { backfill: true });
                     const turnAtIndex = getConversationTurnAtIndexFromSnapshot(snapshot, index);
                     const uiTurnAtIndex = turnAtIndex;
-                    await filterMemoriesAsync(m => (m.turn || 0) < turnAtIndex);
                     removeClassicMemoriesFromTurn(turnAtIndex);
                     const uiCleanup = pruneUiTemplateChangesFromTurn(uiTurnAtIndex);
                     // Remove timing record for the message being regenerated
@@ -4377,7 +4203,6 @@ const app = createApp({
                     }
                     chatHistory.value = chatHistory.value.slice(0, index);
                     syncMemoryConversationBindings(buildConversationTurnSnapshot());
-                    clearCurrentVectorEmptyTurns();
                     removeOrphanedUiTemplateCorrections();
                     await saveConversationMutationNow({ saveTemplateRuntime: uiCleanup.logs > 0 || uiCleanup.blocks > 0 });
                     await saveMemorySettingsNow();
@@ -4420,12 +4245,20 @@ const app = createApp({
             type: 'function',
             function: {
                 name: tool.callName,
-                description: `${tool.description} 每次最多返回 ${tool.resultCount} 条。`,
-                parameters: {
+                description: tool.resultCount ? `${tool.description} 每次最多返回 ${tool.resultCount} 条。` : tool.description,
+                parameters: tool.type === ACTIVE_TOOL_RANDOM_TYPE ? {
+                    type: 'object',
+                    properties: {
+                        min: { type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER, description: '随机整数的下限，包含该值。' },
+                        max: { type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER, description: '随机整数的上限，包含该值，不小于 min。' },
+                        reason: { type: 'string', description: '可选，一句话说明随机判定的用途。' }
+                    },
+                    required: ['min', 'max'],
+                    additionalProperties: false
+                } : {
                     type: 'object',
                     properties: {
                         query: { type: 'string', description: isWebActiveTool(tool) ? '具体搜索词，或需要读取的真实网页 URL。' : '前文原文中可能出现的关键词。' },
-                        mode: { type: 'string', enum: ['add', 'cover'], description: '默认 add 保留已有结果；cover 用新结果替换本轮此前所有检索结果。' },
                         reason: { type: 'string', description: '可选，一句话说明检索用途。' }
                     },
                     required: ['query'],
@@ -4602,7 +4435,7 @@ const app = createApp({
 
             const activeToolPrompt = buildActiveToolSystemPrompt(requestTools);
             if (activeToolPrompt) systemPromptParts.push(activeToolPrompt);
-            else if (activeToolDepth > 0) systemPromptParts.push('本轮检索已结束，请依据已有结果完成回复，不再调用检索工具；无法确认的信息明确说明。');
+            else if (activeToolDepth > 0) systemPromptParts.push('本轮工具调用已结束，请依据已有结果完成回复，不再调用工具；无法确认的信息明确说明。');
 
             const uiTemplateContextPrompt = buildUiTemplateContextSystemPrompt();
             if (uiTemplateContextPrompt) systemPromptParts.push(uiTemplateContextPrompt);
@@ -4681,7 +4514,7 @@ const app = createApp({
                 });
             }
 
-            // 记忆压缩：一次总结替换旧 AI 消息；二次总结把对应五轮合成一条。
+            // 记忆压缩：一次总结替换旧 AI 消息；二次总结合并每五轮中有效的记忆。
             const recentThinkingByMessage = new Map();
             if (cotPresets.length > 0) {
                 for (let index = chatHistory.value.length - 1; index >= 0 && recentThinkingByMessage.size < 2; index--) {
@@ -4698,51 +4531,6 @@ const app = createApp({
             const suppressedUiTemplateCorrectionIndexes = new Set();
 
             if (memorySettings.enabled
-                && memorySettings.mode === MEMORY_MODE_VECTOR
-                && memories.value.length > 0) {
-                const totalFloors = chatHistoryForContext.length;
-                const keepCount = memorySettings.vectorKeepFloors;
-
-                if (totalFloors > keepCount) {
-                    const candidateCount = totalFloors - keepCount;
-
-                    const memoryTurnSet = new Set(
-                        memories.value
-                            .filter(isEnabledVectorMemory)
-                            .map(memory => memory.turn || 0)
-                            .filter(turn => turn > 0)
-                    );
-                    const emptyLog = memorySettings.emptyTurns?.[
-                        getMemoryEmptyTurnsKey(getCurrentStoryBranchScopeId())
-                    ] || [];
-                    const emptyTurnSet = new Set(emptyLog);
-
-                    const removableIndices = new Set();
-                    const contextSnapshot = buildConversationTurnSnapshot(chatHistoryForContext, { alreadyPostprocessed: true });
-
-                    contextSnapshot.turns.forEach(turnInfo => {
-                        if (!turnInfo.messageIndexes.every(messageIndex => messageIndex < candidateCount)) return;
-                        const hasMemory = memoryTurnSet.has(turnInfo.turn);
-                        const isEmpty = emptyTurnSet.has(turnInfo.turn);
-
-                        if (hasMemory || isEmpty) {
-                            turnInfo.messageIndexes.forEach(messageIndex => removableIndices.add(messageIndex));
-                        }
-                    });
-
-                    if (removableIndices.size > 0) {
-                        const newChatHistoryForContext = [];
-
-                        for (let idx = 0; idx < chatHistoryForContext.length; idx++) {
-                            if (!removableIndices.has(idx)) {
-                                newChatHistoryForContext.push(chatHistoryForContext[idx]);
-                            }
-                        }
-                        chatHistoryForContext = newChatHistoryForContext;
-                    }
-                }
-            } else if (memorySettings.enabled
-                && memorySettings.mode === MEMORY_MODE_CLASSIC
                 && classicMemories.value.length > 0) {
                 const candidateCount = Math.max(0, chatHistoryForContext.length - memorySettings.summaryKeepFloors);
                 if (candidateCount > 0) {
@@ -4873,25 +4661,10 @@ const app = createApp({
                     .join('\n\n')
             });
 
-            let selectedVectorMemories = [];
-            if (memorySettings.enabled
-                && memorySettings.mode === MEMORY_MODE_VECTOR
-                && memories.value.length > 0) {
-                selectedVectorMemories = await selectVectorMemoriesForContext(abortController.value.signal, {
-                    excludedTurns: getRetainedRecentMemoryTurns(postprocessedChatHistory)
-                });
-            }
-
-            // Handle @D (At Depth) and other message-level injections
-            const vectorMemoriesForContext = memorySettings.enabled
-                && memorySettings.mode === MEMORY_MODE_VECTOR
-                ? mergeRepeatedTurnVectorMemories(selectedVectorMemories)
-                : [];
+            // 世界书与其他提示处理完成后，再把召回附在最新用户消息末尾。
             messages = injectContextMessages({
                 messages,
                 worldInfoGroups: wiGroups,
-                vectorMemories: vectorMemoriesForContext,
-                vectorDepth: MEMORY_VECTOR_DEFAULT_DEPTH,
                 safeTargetLimit
             });
             if (activeToolDepth === 0) messages = appendActiveToolReminderToLatestUserMessage(messages);
@@ -4904,29 +4677,6 @@ const app = createApp({
                 })
             }));
 
-            // 必须在正则、角色合并和记忆处理之后追加，保留 tool_call_id 及服务端签名。
-            messages.push(...activeToolMessages);
-            const contextViewerState = buildContextViewerState({
-                messages,
-                budgetedEntries,
-                triggeredEntries,
-                postprocessedChatHistory,
-                worldInfoSettings
-            });
-            lastContextMessages.value = contextViewerState.contextMessages;
-            lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
-
-            const apiMessages = messages.map(({ role, name, content, tool_calls, tool_call_id, reasoning_content, reasoning, reasoning_details, extra_content }) => ({
-                role,
-                name,
-                content,
-                ...(tool_calls ? { tool_calls } : {}),
-                ...(tool_call_id ? { tool_call_id } : {}),
-                ...(reasoning_content ? { reasoning_content } : {}),
-                ...(reasoning ? { reasoning } : {}),
-                ...(reasoning_details ? { reasoning_details } : {}),
-                ...(extra_content ? { extra_content } : {})
-            }));
             let generatedAssistantMessageId = null;
             let assistantMessage = null;
             let continuingAssistantMessage = continuationTargetMessage;
@@ -5013,6 +4763,36 @@ const app = createApp({
             };
 
             try {
+                // 召回与主请求共用取消处理，避免停止时遗漏状态和计时器的清理。
+                if (memorySettings.enabled && memorySettings.mode === MEMORY_MODE_ENHANCED) {
+                    const recalled = await selectEnhancedMemories(requestSignal);
+                    messages = appendEnhancedMemoryRecall(messages, recalled);
+                }
+                if (requestSignal.aborted) throw createAbortReason();
+
+                // 必须在正则、角色合并和记忆处理之后追加，保留 tool_call_id 及服务端签名。
+                messages.push(...activeToolMessages);
+                const contextViewerState = buildContextViewerState({
+                    messages,
+                    budgetedEntries,
+                    triggeredEntries,
+                    postprocessedChatHistory,
+                    worldInfoSettings
+                });
+                lastContextMessages.value = contextViewerState.contextMessages;
+                lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
+
+                const apiMessages = messages.map(({ role, name, content, tool_calls, tool_call_id, reasoning_content, reasoning, reasoning_details, extra_content }) => ({
+                    role,
+                    name,
+                    content,
+                    ...(tool_calls ? { tool_calls } : {}),
+                    ...(tool_call_id ? { tool_call_id } : {}),
+                    ...(reasoning_content ? { reasoning_content } : {}),
+                    ...(reasoning ? { reasoning } : {}),
+                    ...(reasoning_details ? { reasoning_details } : {}),
+                    ...(extra_content ? { extra_content } : {})
+                }));
                 const responseResult = await requestTrackedChatCompletion({
                     model: requestModel,
                     messages: apiMessages,
@@ -5058,7 +4838,7 @@ const app = createApp({
                 }, activeToolDepth > 0 ? 'tool_continuation' : 'chat');
                 if (requestSignal.aborted) throw createAbortReason();
                 if (activeToolDepth > 0 && !responseResult.toolCalls.length && !responseResult.content.trim()) {
-                    throw new Error('检索完成，但 API 未返回正文，请重新尝试。');
+                    throw new Error('工具调用完成，但 API 未返回正文，请重新尝试。');
                 }
                 if (!responseResult.isStream) {
                     const { content, reasoning } = responseResult;
@@ -5181,100 +4961,21 @@ const app = createApp({
         };
 
         // --- Memory Extraction ---
-        let _batchExtractAbort = null;
         let _classicBatchExtractAbort = null;
         let _classicExtractionEpoch = 0;
-        let _vectorBatchRescanRequested = false;
         let _classicBatchRescanRequested = false;
         const _classicSummaryInFlightKeys = new Set();
 
-        const abortVectorBatchExtraction = () => {
-            if (_batchExtractAbort) {
-                _batchExtractAbort.abort();
-                _batchExtractAbort = null;
-            }
-            _vectorBatchRescanRequested = false;
-            isBatchExtracting.value = false;
-        };
-
-        const getMemoryEmbeddingModel = () => (memorySettings.embeddingModel || '').trim();
-
-        const stripVectorMemoryCode = (text) => {
-            if (!text) return '';
-
-            let result = stripNextResponsePrompt(stripUiTemplateUpdateBlock(stripUiTemplateContextInjection(text)))
-                .replace(/<image>[\s\S]*?<\/image>/gi, '')
-                .replace(/```[\s\S]*?```/g, '')
-                .replace(/~~~[\s\S]*?~~~/g, '')
-                .replace(/<!DOCTYPE[\s\S]*?>/gi, '')
-                .replace(/<html[\s\S]*?<\/html>/gi, '')
-                .replace(/<(script|style|template|svg|canvas|iframe|object|embed|head|link|meta)[\s\S]*?<\/\1>/gi, '')
-                .replace(/<(script|style|template|svg|canvas|iframe|object|embed|link|meta|input|img|br|hr)\b[^>]*\/?>/gi, '')
-                .replace(/<!--[\s\S]*?-->/g, '')
-                .replace(/`[^`\n]{1,200}`/g, '');
-
-            const lines = result.split(/\r?\n/);
-            const cleanedLines = [];
-            let removedLines = 0;
-
-            const isCodeLikeLine = (line) => {
-                const trimmed = line.trim();
-                if (!trimmed) return false;
-                if (/^<\/?[a-z][\w:-]*(\s|>|\/>)/i.test(trimmed)) return true;
-                if (/^[{}()[\];,]+$/.test(trimmed)) return true;
-                if (/^(const|let|var|function|class|import|export|return|if|else|for|while|switch|try|catch)\b/.test(trimmed)) return true;
-                if (/^(#include|using\s+namespace|public:|private:|protected:|def\s+|from\s+\S+\s+import\s+)/.test(trimmed)) return true;
-                if (/^(@click|v-if|v-for|v-model|class=|style=|id=|data-|aria-)/i.test(trimmed)) return true;
-                if (/^[.#]?[a-zA-Z0-9_-]+\s*\{/.test(trimmed)) return true;
-                if (/[{};]/.test(trimmed) && /(=>|===|!==|&&|\|\||;\s*$|:\s*function|\bconsole\.|\bdocument\.|\bwindow\.)/.test(trimmed)) return true;
-                if (/<\/?[a-z][\w:-]*[\s\S]*?>/i.test(trimmed) && !/[，。！？、]/.test(trimmed)) return true;
-                return false;
-            };
-
-            lines.forEach(line => {
-                if (isCodeLikeLine(line)) {
-                    removedLines++;
-                    return;
-                }
-                cleanedLines.push(line);
-            });
-
-            result = cleanedLines.join('\n')
-                .replace(/<\/?[a-z][\w:-]*\b[^>]*>/gi, '')
-                .replace(/&nbsp;/gi, ' ')
-                .replace(/&amp;/gi, '&')
-                .replace(/&lt;/gi, '<')
-                .replace(/&gt;/gi, '>')
-                .replace(/&quot;/gi, '"')
-                .replace(/&#039;/gi, "'")
-                .replace(/[ \t]{2,}/g, ' ')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim();
-
-            return result;
-        };
-
-        const getCleanMemoryMessageText = (message) => {
+        const getMemoryEmbeddingModel = () => String(memorySettings.embeddingModel || '').trim();
+        const getMemoryMessageText = message => {
             if (!message) return '';
-            const sourceIndexes = Array.isArray(message._sourceIndexes) ? message._sourceIndexes : [];
-            const sourceMessages = sourceIndexes.length > 0
-                ? sourceIndexes.map(sourceIndex => chatHistory.value[sourceIndex]).filter(source => source && source.role === message.role)
+            const indexes = message._sourceIndexes || [];
+            const sources = indexes.length
+                ? indexes.map(index => chatHistory.value[index]).filter(source => source?.role === message.role)
                 : [message];
-            return sourceMessages
-                .map(source => appendMessageImageDescriptions(source, stripVectorMemoryCode(parseCot(source.content || '').main)))
-                .map(text => text.trim())
-                .filter(Boolean)
-                .join('\n\n');
-        };
-
-        const buildMemoryChunkText = (messagesArray, maxLength = 2400) => {
-            const text = messagesArray.map(m => {
-                const name = m.role === 'user' ? '用户' : '角色卡';
-                const cleanMsg = getCleanMemoryMessageText(m);
-                if (!cleanMsg) return '';
-                return `${name}：${cleanMsg}`;
-            }).filter(Boolean).join('\n\n');
-            return trimMemoryText(text, maxLength);
+            return sources.map(source => appendMessageImageDescriptions(source,
+                stripNextResponsePrompt(stripUiTemplateContextInjection(parseCot(source.content || '').main))
+            )).filter(Boolean).join('\n\n');
         };
 
         const getClassicTurnSourceIds = (turnInfo, role) => {
@@ -5318,8 +5019,8 @@ const app = createApp({
 
             const contextTurns = turns.slice(Math.max(0, targetIndex - 3), targetIndex + 1).map(turnInfo => ({
                 turn: turnInfo.turn,
-                userContent: getCleanMemoryMessageText(turnInfo.user),
-                assistantContent: getCleanMemoryMessageText(turnInfo.assistant),
+                userContent: getMemoryMessageText(turnInfo.user),
+                assistantContent: getMemoryMessageText(turnInfo.assistant),
                 isTarget: turnInfo === targetTurn
             }));
             const targetContext = contextTurns[contextTurns.length - 1];
@@ -5335,7 +5036,11 @@ const app = createApp({
                 contextTurns,
                 sourceUserIds,
                 sourceAssistantIds,
-                sourceUserText: targetContext.userContent,
+                sourceUserText: (targetTurn.user?._sourceIndexes || [])
+                    .map(index => chatHistory.value[index])
+                    .filter(message => message?.role === 'user')
+                    .map(message => String(message.content || ''))
+                    .join('\n\n') || String(targetTurn.user?.content || ''),
                 sourceAssistantText: targetContext.assistantContent,
                 key: getClassicMemoryKey(sourceAssistantIds, targetTurn.turn)
             };
@@ -5344,7 +5049,7 @@ const app = createApp({
         const requestClassicMemoryCompletion = async (requestMessages, signal) => {
             const model = String(memorySettings.classicModel || '').trim();
             if (!settings.apiUrl || !settings.apiKey) throw new Error('请先配置 API 地址和 Key');
-            if (!model) throw new Error('请先选择总结模式副模型');
+            if (!model) throw new Error('请先选择总结模型');
 
             const result = await requestTrackedChatCompletion({
                 model, temperature: 0.2, stream: false, messages: requestMessages, signal
@@ -5418,6 +5123,7 @@ const app = createApp({
         const getEligibleClassicSecondaryGroups = (totalTurns) => {
             const compressionLimit = Math.max(0, Number(totalTurns) - CLASSIC_SECONDARY_KEEP_TURNS);
             if (compressionLimit < CLASSIC_SECONDARY_GROUP_SIZE) return [];
+            const { turns } = buildConversationTurnSnapshot(chatHistory.value, { includeSystem: false });
             const byTurn = new Map();
             classicMemories.value.forEach(memory => {
                 const turn = Number(memory?.turn);
@@ -5426,7 +5132,13 @@ const app = createApp({
             const groups = [];
             for (let start = 1; start + CLASSIC_SECONDARY_GROUP_SIZE - 1 <= compressionLimit; start += CLASSIC_SECONDARY_GROUP_SIZE) {
                 const group = Array.from({ length: CLASSIC_SECONDARY_GROUP_SIZE }, (_, offset) => byTurn.get(start + offset));
-                if (group.every(Boolean)) groups.push(group);
+                // 仅跳过确认没有正文的空轮；有正文却缺总结的轮次必须先补录。
+                const complete = group.every((memory, offset) => {
+                    const turnInfo = turns[start + offset - 1];
+                    return memory || (turnInfo && !getMemoryMessageText(turnInfo.assistant).trim());
+                });
+                const summaries = group.filter(Boolean);
+                if (complete && summaries.length > 1) groups.push(summaries);
             }
             return groups;
         };
@@ -5467,7 +5179,7 @@ const app = createApp({
                                 const range = `${result.group[0].turn}-${result.group[result.group.length - 1].turn}`;
                                 while (true) {
                                     const retry = await showVueConfirmModal(
-                                        '总结模式补录遇到错误',
+                                        '基础模式补录遇到错误',
                                         `第 ${range} 轮二次压缩失败：\n${retryError.message}\n\n是否立即重试？`
                                     );
                                     if (!retry) {
@@ -5543,12 +5255,17 @@ const app = createApp({
 
         const retryClassicMemory = async (memory) => {
             if (!memory?.id || retryingClassicMemoryId.value) return;
-            if (isBatchExtracting.value || isClassicBatchExtracting.value) {
+            if (memorySettings.mode === MEMORY_MODE_ENHANCED && !getMemoryEmbeddingModel()) {
+                showToast('请先选择向量模型', 'warning');
+                return;
+            }
+            if (isClassicBatchExtracting.value) {
                 showToast('请先等待补录完成', 'warning');
                 return;
             }
 
             const memoryId = memory.id;
+            const retryEpoch = _classicExtractionEpoch;
             const retryCharacterId = currentCharacter.value?.uuid;
             const retryStoryScopeId = getCurrentStoryBranchScopeId();
             retryingClassicMemoryId.value = memoryId;
@@ -5560,7 +5277,7 @@ const app = createApp({
                         return;
                     }
                     const summary = await requestClassicSecondarySummary(sourceMemories);
-                    if (currentCharacter.value?.uuid !== retryCharacterId
+                    if (retryEpoch !== _classicExtractionEpoch || currentCharacter.value?.uuid !== retryCharacterId
                         || getCurrentStoryBranchScopeId() !== retryStoryScopeId) return;
                     const memoryIndex = classicMemories.value.findIndex(item => item.id === memoryId);
                     if (memoryIndex < 0) return;
@@ -5589,7 +5306,7 @@ const app = createApp({
                     return;
                 }
                 const summary = await requestClassicMemorySummary(job);
-                if (currentCharacter.value?.uuid !== job.characterId || getCurrentStoryBranchScopeId() !== job.storyScopeId) return;
+                if (retryEpoch !== _classicExtractionEpoch || currentCharacter.value?.uuid !== job.characterId || getCurrentStoryBranchScopeId() !== job.storyScopeId) return;
 
                 const memoryIndex = classicMemories.value.findIndex(item => item.id === memoryId);
                 if (memoryIndex < 0) return;
@@ -5603,7 +5320,11 @@ const app = createApp({
                     sourceUserText: job.sourceUserText,
                     sourceAssistantText: job.sourceAssistantText
                 });
+                const updated = classicMemories.value[memoryIndex];
+                ['embeddingQ', 'embeddingScale', 'embeddingDims', 'embeddingEncoding', 'embeddingModel', 'embeddingApiUrl']
+                    .forEach(key => delete updated[key]);
                 await saveClassicMemoriesNow();
+                if (memorySettings.mode === MEMORY_MODE_ENHANCED) await indexSummaryMemories(snapshot, undefined, [updated]);
                 showToast(`第 ${job.turn} 轮总结已重新生成`, 'success');
             } catch (error) {
                 console.error('Retry classic memory failed:', error);
@@ -5644,95 +5365,9 @@ const app = createApp({
 
         const extractMemoryFromChat = () => startAutomaticMemoryPatrol();
 
-        const getMemoryTurnForChunk = (chunkEndIdx) => getConversationTurnAtIndex(chunkEndIdx);
-
-        const buildVectorMemoryFragments = (messagesArray, chunkEndIdx, turnOverride = null) => {
-            const turn = turnOverride || getMemoryTurnForChunk(chunkEndIdx);
-            const userBlocks = [];
-            const roleBlocks = [];
-
-            messagesArray.forEach((message, messageIndex) => {
-                if (message.role !== 'user' && message.role !== 'assistant') return;
-                const speaker = message.role === 'user' ? user.name : (message.name || currentCharacter.value?.name || 'AI');
-                const sourceLabel = message.role === 'user' ? '用户' : '角色卡';
-                const sourceMessageIds = (message._sourceIndexes || [])
-                    .map(index => chatHistory.value[index]?.id)
-                    .filter(Boolean);
-                const cleanMessageText = getCleanMemoryMessageText(message);
-                const storyTime = message.role === 'assistant' ? extractStoryTime(cleanMessageText) : '';
-                const paragraphs = splitMemoryParagraphs(storyTime ? stripStoryTimeLine(cleanMessageText) : cleanMessageText)
-                    .flatMap(paragraph => splitLongMemoryParagraph(paragraph, MEMORY_VECTOR_MERGE_MAX_LENGTH));
-                const paragraphGroups = mergeSmallMemoryParagraphs(paragraphs);
-                paragraphGroups.forEach((group) => {
-                    const block = {
-                        messageIndex,
-                        idPart: `${messageIndex}:${message.role}:${group.start}-${group.end}`,
-                        paragraphIndex: group.start,
-                        paragraphEndIndex: group.end,
-                        speaker,
-                        role: message.role,
-                        sourceMessageIds,
-                        storyTime,
-                        text: group.text
-                    };
-                    if (message.role === 'user') {
-                        userBlocks.push(block);
-                    } else {
-                        roleBlocks.push({
-                            ...block,
-                            text: `${sourceLabel}：${group.text}`
-                        });
-                    }
-                });
-            });
-
-            const userText = userBlocks.map(block => block.text).filter(Boolean).join('\n\n');
-            const userLine = userText ? `用户：${userText}` : '';
-            const userIdPart = userBlocks.map(block => block.idPart).join('+');
-            const userSourceIds = [...new Set(userBlocks.flatMap(block => block.sourceMessageIds || []))];
-
-            const sourceBlocks = roleBlocks.length > 0
-                ? roleBlocks
-                : userBlocks.map(block => ({
-                    ...block,
-                    text: `用户：${block.text}`
-                }));
-
-            const fragments = sourceBlocks.map((block, index) => {
-                const includeUser = roleBlocks.length > 0 && userLine;
-                const paragraph = [
-                    includeUser ? userLine : '',
-                    block.storyTime ? `剧情时间：${block.storyTime}` : '',
-                    block.text
-                ].filter(Boolean).join('\n');
-                const roles = includeUser ? ['user', block.role] : [block.role];
-                const idParts = [includeUser ? userIdPart : '', block.idPart].filter(Boolean).join('+');
-                const sourceUserIds = includeUser || block.role === 'user' ? userSourceIds : [];
-                const sourceAssistantIds = block.role === 'assistant' ? block.sourceMessageIds : [];
-                return {
-                    turn,
-                    sequence: index + 1,
-                    messageIndex: block.messageIndex,
-                    paragraphIndex: block.paragraphIndex,
-                    paragraphEndIndex: block.paragraphEndIndex,
-                    speaker: includeUser ? [user.name, block.speaker].filter(Boolean).join(' + ') : block.speaker,
-                    role: roles.length === 1 ? roles[0] : 'mixed',
-                    sourceUserIds,
-                    sourceAssistantIds,
-                    paragraph,
-                    ...(block.storyTime ? { storyTime: block.storyTime } : {}),
-                    sourceText: [`第 ${turn || '?'} 轮`, paragraph].filter(Boolean).join('\n'),
-                    vectorChunkId: `${turn || 0}:${idParts}`
-                };
-            });
-
-            return fragments;
-        };
-
-        const requestMemoryEmbeddings = async (inputs, signal) => {
-            const model = getMemoryEmbeddingModel();
+        const requestMemoryEmbeddings = async (inputs, signal, model = getMemoryEmbeddingModel()) => {
             if (!settings.apiUrl || !settings.apiKey) throw new Error('请先配置 API 地址和 Key');
-            if (!model) throw new Error('请先选择向量嵌入模型');
+            if (!model) throw new Error('请先选择向量模型');
 
             const normalizedInputs = inputs.map(input => String(input || '').trim());
             if (normalizedInputs.some(input => !input)) throw new Error('嵌入内容不能为空');
@@ -5757,482 +5392,108 @@ const app = createApp({
                 abortError.name = 'AbortError';
                 throw abortError;
             }
-            if (vectors.length !== normalizedInputs.length || vectors.some(vector => vector.length === 0)) {
+            if (vectors.length !== normalizedInputs.length || vectors.some(vector => vector.length === 0 || vector.length !== vectors[0].length)) {
                 throw new Error('嵌入接口返回的数据不完整');
             }
 
             return vectors;
         };
 
-        const getVectorFragmentFingerprint = (fragment) => {
-            return getVectorMemoryContentFingerprint(fragment?.paragraph || fragment?.sourceText || '');
-        };
+        const hasCurrentSummaryEmbedding = (memory, model = getMemoryEmbeddingModel(), apiUrl = settings.apiUrl) =>
+            memory.embeddingModel === model && memory.embeddingApiUrl === apiUrl
+            && getSummaryEmbedding(memory).length > 0;
 
-        const getStoredVectorMemoryFingerprint = (memory) => {
-            return memory?.contentFingerprint
-                || getVectorMemoryContentFingerprint(memory?.paragraph || memory?.summary || memory?.sourceText || '');
-        };
-
-        const createVectorMemoryFromFragment = (fragment, embedding) => {
-            return prepareMemoryForRuntime({
-                id: generateUUID(),
-                timestamp: Date.now(),
-                turn: fragment.turn,
-                summary: trimMemoryText(fragment.paragraph, 900),
-                enabled: true,
-                vectorMemory: true,
-                chunkMode: 'paragraph',
-                vectorChunkId: fragment.vectorChunkId,
-                sourceRole: fragment.role,
-                sourceName: fragment.speaker,
-                paragraph: fragment.paragraph,
-                paragraphIndex: fragment.paragraphIndex,
-                paragraphEndIndex: fragment.paragraphEndIndex,
-                sequence: fragment.sequence,
-                contentFingerprint: getVectorFragmentFingerprint(fragment),
-                sourceUserIds: fragment.sourceUserIds,
-                sourceAssistantIds: fragment.sourceAssistantIds,
-                embeddingModel: getMemoryEmbeddingModel(),
-                embedding,
-                sourceText: fragment.sourceText,
-                ...(fragment.storyTime ? { storyTime: fragment.storyTime } : {})
-            });
-        };
-
-        const _doBatchEmbedMemoryChunks = async (chunks, signal, emptyLog, options = {}) => {
-            const {
-                interactive = true,
-                storyScopeId = getCurrentStoryBranchScopeId(),
-                memorySource = memories.value
-            } = options;
-            let totalAdded = 0;
-            const existingChunkIds = new Set(memorySource
-                .filter(m => m.vectorMemory === true && m.chunkMode === 'paragraph' && m.vectorChunkId)
-                .map(m => m.vectorChunkId));
-            const existingFingerprints = new Set(memorySource
-                .filter(isVectorMemory)
-                .map(getStoredVectorMemoryFingerprint)
-                .filter(Boolean));
-            const pendingFingerprints = new Set();
-            const fragmentItems = [];
-
-            chunks.forEach(chunk => {
-                const allFragments = buildVectorMemoryFragments(chunk.data, chunk.endIdx, chunk.turnValue);
-                const missingFragments = allFragments
-                    .filter(fragment => {
-                        if (existingChunkIds.has(fragment.vectorChunkId)) return false;
-                        const fingerprint = getVectorFragmentFingerprint(fragment);
-                        if (fingerprint && (existingFingerprints.has(fingerprint) || pendingFingerprints.has(fingerprint))) {
-                            return false;
-                        }
-                        if (fingerprint) pendingFingerprints.add(fingerprint);
-                        return true;
-                    });
-                if (allFragments.length === 0) {
-                    if (!emptyLog.includes(chunk.turnValue)) emptyLog.push(chunk.turnValue);
-                    return;
-                }
-                missingFragments.forEach(fragment => fragmentItems.push({ chunk, fragment }));
-            });
-
-            if (fragmentItems.length === 0) {
-                await saveMemorySettingsNow();
-                return 0;
-            }
-
-            const totalRequests = Math.ceil(fragmentItems.length / MEMORY_VECTOR_BATCH_SIZE);
-            batchExtractProgress.value = { current: 0, total: totalRequests };
-            let batchesSinceSave = 0;
-            const flushBatchMemorySave = async () => {
-                if (batchesSinceSave <= 0) return;
-                await saveMemoriesNow(storyScopeId, memorySource);
-                await saveMemorySettingsNow();
-                batchesSinceSave = 0;
-            };
-
-            for (let i = 0; i < fragmentItems.length; i += MEMORY_VECTOR_BATCH_SIZE) {
-                if (signal?.aborted) {
-                    const abortError = new Error('Aborted');
-                    abortError.name = 'AbortError';
-                    throw abortError;
-                }
-
-                const batch = fragmentItems.slice(i, i + MEMORY_VECTOR_BATCH_SIZE);
-
-                try {
-                    const vectors = await requestMemoryEmbeddings(batch.map(item => item.fragment.sourceText), signal);
-                    if (signal?.aborted) {
-                        const abortError = new Error('Aborted');
-                        abortError.name = 'AbortError';
-                        throw abortError;
-                    }
-                    const newMemories = [];
-
-                    batch.forEach((item, index) => {
-                        const fingerprint = getVectorFragmentFingerprint(item.fragment);
-                        const hasMemory = memorySource.some(m => m.vectorChunkId === item.fragment.vectorChunkId)
-                            || newMemories.some(m => m.vectorChunkId === item.fragment.vectorChunkId)
-                            || (fingerprint && memorySource.some(m => getStoredVectorMemoryFingerprint(m) === fingerprint))
-                            || (fingerprint && newMemories.some(m => getStoredVectorMemoryFingerprint(m) === fingerprint));
-                        if (hasMemory) return;
-
-                        newMemories.push(createVectorMemoryFromFragment(item.fragment, vectors[index]));
-                    });
-
-                    if (newMemories.length > 0) {
-                        memorySource.push(...newMemories);
-                        totalAdded += newMemories.length;
-                    }
-
-                    const touchedTurns = new Set(batch.map(item => item.chunk.turnValue));
-                    touchedTurns.forEach(turnValue => {
-                        const added = newMemories.some(m => (m.turn || 0) === turnValue)
-                            || memorySource.some(m => m.vectorMemory === true && m.chunkMode === 'paragraph' && (m.turn || 0) === turnValue);
-                        if (added && emptyLog.includes(turnValue)) {
-                            emptyLog.splice(emptyLog.indexOf(turnValue), 1);
-                        } else if (!added && !emptyLog.includes(turnValue)) {
-                            emptyLog.push(turnValue);
-                        }
-                    });
-
-                    batchExtractProgress.value.current = Math.min(
-                        Math.floor(i / MEMORY_VECTOR_BATCH_SIZE) + 1,
-                        totalRequests
-                    );
-                    batchesSinceSave++;
-
-                    const isLastBatch = i + batch.length >= fragmentItems.length;
-                    if (isLastBatch || batchesSinceSave >= MEMORY_VECTOR_SAVE_EVERY_BATCHES) {
-                        await flushBatchMemorySave();
-                    }
-                } catch (err) {
-                    if (err.name === 'AbortError') {
-                        await flushBatchMemorySave();
-                        throw err;
-                    }
-
-                    if (!interactive) {
-                        await flushBatchMemorySave();
-                        throw err;
-                    }
-
-                    const retry = await showVueConfirmModal(
-                        '向量补录遇到错误',
-                        `第 ${i + 1}-${Math.min(i + batch.length, fragmentItems.length)} 个段落补录遇到错误：\n${err.message}\n\n是否立即重试？`
-                    );
-                    if (retry) {
-                        i -= MEMORY_VECTOR_BATCH_SIZE;
-                        continue;
-                    }
-
-                    const abortErr = new Error('用户取消了重试并中止了向量补录');
-                    abortErr.name = 'AbortError';
-                    await flushBatchMemorySave();
-                    throw abortErr;
-                }
-            }
-
-            await flushBatchMemorySave();
-
-            return totalAdded;
-        };
-
-        const getVectorMemoryTopK = () => Math.max(
-            MEMORY_VECTOR_MIN_TOP_K,
-            Math.min(MEMORY_VECTOR_MAX_TOP_K, Number(memorySettings.vectorTopK) || MEMORY_VECTOR_DEFAULT_TOP_K)
-        );
-
-        const passesMemorySimilarityThreshold = (score) => {
-            return score >= MEMORY_VECTOR_SIMILARITY_THRESHOLD / 100;
-        };
-
-        const getRecentUserMemoryQueries = (limit = 3) => {
-            return getPostprocessedChatMessages(chatHistory.value, { includeSystem: false })
-                .filter(message => message.role === 'user')
-                .map(message => trimMemoryText(getCleanMemoryMessageText(message), 800))
-                .filter(Boolean)
-                .slice(-Math.max(1, limit));
-        };
-
-        const getLatestUserMemoryQuery = () => {
-            const queries = getRecentUserMemoryQueries(1);
-            return queries[0] || '';
-        };
-
-        const buildVectorMemoryQueryText = () => {
-            const recentUserQueries = getRecentUserMemoryQueries(2);
-            if (recentUserQueries.length === 0) return '';
-
-            const latestUserQuery = recentUserQueries[recentUserQueries.length - 1];
-            const previousUserQueries = recentUserQueries.slice(0, -1);
-
-            return [
-                `当前问题：用户：${latestUserQuery}`,
-                ...[...previousUserQueries].reverse().map((query, index) => {
-                    const distance = index + 1;
-                    const label = distance === 1 ? '上一轮用户输入' : `前${distance}轮用户输入`;
-                    return `${label}：用户：${query}`;
-                })
-            ].filter(Boolean).join('\n\n');
-        };
-
-        const buildFullTurnMemoryText = (turnInfo) => {
-            const messagesArray = Array.isArray(turnInfo?.messages) ? turnInfo.messages : [];
-            return buildMemoryChunkText(messagesArray, Number.MAX_SAFE_INTEGER);
-        };
-
-        const mergeRepeatedTurnVectorMemories = (items) => {
-            const orderedItems = sortVectorMemoriesByTime(items);
-            const memoriesByTurn = new Map();
-
-            orderedItems.forEach(memory => {
-                const turn = Number(memory?.turn) || 0;
-                if (turn <= 0) return;
-                if (!memoriesByTurn.has(turn)) memoriesByTurn.set(turn, []);
-                memoriesByTurn.get(turn).push(memory);
-            });
-
-            const repeatedTurns = new Set(
-                [...memoriesByTurn.entries()]
-                    .filter(([, turnMemories]) => turnMemories.length >= 2)
-                    .map(([turn]) => turn)
+        const indexSummaryMemories = async (snapshot, signal, sources = getSummarySources(classicMemories.value)) => {
+            const model = getMemoryEmbeddingModel();
+            const apiUrl = settings.apiUrl;
+            const epoch = _classicExtractionEpoch;
+            const scopeId = getCurrentStoryBranchScopeId();
+            const isCurrent = () => !signal?.aborted && epoch === _classicExtractionEpoch
+                && scopeId === getCurrentStoryBranchScopeId()
+                && memorySettings.mode === MEMORY_MODE_ENHANCED;
+            const messagesById = new Map(chatHistory.value.filter(message => message.id).map(message => [message.id, message]));
+            const turnsByNumber = new Map(snapshot.turns.map(turn => [turn.turn, turn]));
+            const jobs = sources.map(memory => {
+                const inputs = (memory.sourceUserIds || []).map(id => messagesById.get(id))
+                    .filter(message => message?.role === 'user').map(message => String(message.content || ''));
+                const turn = turnsByNumber.get(Number(memory.turn));
+                const sourceUserText = inputs.length ? inputs.join('\n\n')
+                    : memory.sourceUserText || String(turn?.user?.content || '');
+                return { memory, sourceUserText };
+            }).filter(({ memory, sourceUserText }) =>
+                !hasCurrentSummaryEmbedding(memory, model, apiUrl) || sourceUserText !== memory.sourceUserText
             );
-            if (repeatedTurns.size === 0) return orderedItems;
-
-            const snapshot = buildConversationTurnSnapshot(chatHistory.value, { includeSystem: false });
-            const turnsByNumber = new Map((snapshot.turns || []).map(turnInfo => [Number(turnInfo.turn) || 0, turnInfo]));
-            const mergedTurns = new Set();
-            const result = [];
-
-            orderedItems.forEach(memory => {
-                const turn = Number(memory?.turn) || 0;
-                if (!repeatedTurns.has(turn)) {
-                    result.push(memory);
-                    return;
+            if (!jobs.length) return 0;
+            if (!model) throw new Error('请先选择向量模型');
+            classicBatchExtractProgress.value = { current: 0, total: jobs.length };
+            let completed = 0;
+            for (let offset = 0; offset < jobs.length; offset += SUMMARY_EMBEDDING_BATCH_SIZE) {
+                if (!isCurrent()) return completed;
+                const batch = jobs.slice(offset, offset + SUMMARY_EMBEDDING_BATCH_SIZE);
+                if (batch.some(job => !job.sourceUserText.trim())) {
+                    throw new Error('部分总结找不到用户原输入，无法生成坐标，请重新补录对应对话');
                 }
-
-                if (mergedTurns.has(turn)) return;
-                mergedTurns.add(turn);
-
-                const turnMemories = memoriesByTurn.get(turn) || [memory];
-                const fullTurnText = buildFullTurnMemoryText(turnsByNumber.get(turn))
-                    || buildMergedVectorMemoryFallbackText(turnMemories);
-                if (!fullTurnText) return;
-
-                const bestMemory = [...turnMemories].sort((a, b) => (b.vectorScore || 0) - (a.vectorScore || 0))[0] || memory;
-                const sequenceValues = turnMemories
-                    .map(item => Number(item.sequence) || 0)
-                    .filter(sequence => sequence > 0);
-                result.push({
-                    ...bestMemory,
-                    paragraph: fullTurnText,
-                    summary: fullTurnText,
-                    sourceText: fullTurnText,
-                    sequence: sequenceValues.length ? Math.min(...sequenceValues) : bestMemory.sequence,
-                    vectorMergedTurn: true
-                });
-            });
-
-            return result;
-        };
-
-        const getRetainedRecentMemoryTurns = (messages) => {
-            if (!Array.isArray(messages) || messages.length === 0) return new Set();
-            const keepFloors = memorySettings.vectorKeepFloors;
-
-            const retainedStartIndex = Math.max(0, messages.length - keepFloors);
-            const snapshot = buildConversationTurnSnapshot(messages, { alreadyPostprocessed: true });
-            const retainedTurns = new Set();
-
-            snapshot.turns.forEach(turnInfo => {
-                const turn = Number(turnInfo.turn) || 0;
-                if (turn <= 0) return;
-                const messageIndexes = Array.isArray(turnInfo.messageIndexes) ? turnInfo.messageIndexes : [];
-                if (messageIndexes.some(messageIndex => messageIndex >= retainedStartIndex)) {
-                    retainedTurns.add(turn);
-                }
-            });
-
-            return retainedTurns;
-        };
-
-        const getCurrentRetainedVectorMemoryTurns = () => getRetainedRecentMemoryTurns(
-            getPostprocessedChatMessages(chatHistory.value, { includeSystem: false })
-        );
-
-        const yieldToBrowser = () => new Promise(resolve => setTimeout(resolve, 0));
-
-        const scoreVectorMemories = async (vectorMemories, queryVector, queryTerms, signal) => {
-            const scoredMemories = [];
-            for (let i = 0; i < vectorMemories.length; i++) {
-                if (signal?.aborted) return [];
-                const memory = vectorMemories[i];
-                const rawScore = cosineSimilarity(queryVector, memory.embedding);
-                if (Number.isFinite(rawScore) && rawScore > -1 && passesMemorySimilarityThreshold(rawScore)) {
-                    const lexical = getVectorLexicalMatch(memory, queryTerms);
-                    scoredMemories.push({
-                        memory,
-                        vectorRawScore: rawScore,
-                        vectorLexicalHits: lexical.hits,
-                        vectorLexicalTerms: lexical.matched,
-                        vectorScore: rawScore + lexical.boost
+                const vectors = await requestMemoryEmbeddings(batch.map(job => buildSummaryEmbeddingText({
+                    ...job.memory, sourceUserText: job.sourceUserText
+                })), signal, model);
+                if (!isCurrent()) return completed;
+                const packed = vectors.map(quantizeEmbeddingForStorage);
+                if (packed.some(value => !value)) throw new Error('嵌入接口返回了无效坐标');
+                const currentSources = new Set(getSummarySources(classicMemories.value));
+                batch.forEach((job, index) => {
+                    if (!currentSources.has(job.memory)) return;
+                    Object.assign(job.memory, packed[index], {
+                        embeddingModel: model,
+                        embeddingApiUrl: apiUrl,
+                        sourceUserText: job.sourceUserText
                     });
-                }
-                if (i > 0 && i % 512 === 0) await yieldToBrowser();
+                    completed++;
+                });
+                classicMemories.value = [...classicMemories.value];
+                await saveClassicMemoriesNow(scopeId, classicMemories.value);
+                classicBatchExtractProgress.value.current = completed;
             }
-            return scoredMemories.sort((a, b) => {
-                const scoreDiff = b.vectorScore - a.vectorScore;
-                if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
-                return (b.memory.turn || 0) - (a.memory.turn || 0);
-            });
+            return completed;
         };
 
-        const toScoredVectorMemory = (scored) => ({
-            ...scored.memory,
-            vectorRawScore: scored.vectorRawScore,
-            vectorLexicalHits: scored.vectorLexicalHits,
-            vectorLexicalTerms: scored.vectorLexicalTerms,
-            vectorScore: scored.vectorScore
-        });
-
-        const selectVectorMemoriesForContext = async (signal, options = {}) => {
-            const excludedTurns = options.excludedTurns instanceof Set
-                ? options.excludedTurns
-                : new Set(Array.isArray(options.excludedTurns) ? options.excludedTurns : []);
-            const vectorMemories = memories.value
-                .filter(isEnabledVectorMemory)
-                .filter(memory => {
-                    const turn = Number(memory.turn) || 0;
-                    return turn <= 0 || !excludedTurns.has(turn);
-                });
-
-            if (vectorMemories.length === 0) return [];
-
-            const topK = getVectorMemoryTopK();
-            const queryText = buildVectorMemoryQueryText();
-            const queryTerms = extractVectorQueryTerms(getLatestUserMemoryQuery());
-            if (!queryText) return [];
-
+        const selectEnhancedMemories = async signal => {
+            const sources = getSummarySources(classicMemories.value).filter(memory => hasCurrentSummaryEmbedding(memory));
+            if (!sources.length) return [];
+            const latestUser = [...chatHistory.value].reverse().find(message => message.role === 'user');
+            const query = String(latestUser?.content || '').trim();
+            if (!query) return [];
+            const epoch = _classicExtractionEpoch;
+            const scopeId = getCurrentStoryBranchScopeId();
+            const isCurrent = () => !signal?.aborted && epoch === _classicExtractionEpoch
+                && scopeId === getCurrentStoryBranchScopeId() && memorySettings.enabled
+                && memorySettings.mode === MEMORY_MODE_ENHANCED;
             try {
-                const [queryVector] = await requestMemoryEmbeddings([queryText], signal);
-                if (signal?.aborted || !isEmbeddingLike(queryVector)) return [];
-                const scoredMemories = await scoreVectorMemories(vectorMemories, queryVector, queryTerms, signal);
-
+                const [queryVector] = await requestMemoryEmbeddings([query], signal);
+                if (!isCurrent()) return [];
                 const selected = [];
-                const seen = new Set();
-                for (const scored of scoredMemories) {
-                    const fingerprint = getVectorMemoryFingerprint(scored.memory);
-                    if (!fingerprint || seen.has(fingerprint)) continue;
-                    seen.add(fingerprint);
-                    selected.push(toScoredVectorMemory(scored));
-                    if (selected.length >= topK) break;
+                for (let index = 0; index < sources.length; index++) {
+                    const memory = sources[index];
+                    const score = cosineSimilarity(queryVector, getSummaryEmbedding(memory));
+                    if (score >= SUMMARY_RECALL_MIN_SIMILARITY) selected.push({ ...memory, score });
+                    if (index > 0 && index % 256 === 0) {
+                        await yieldToUi();
+                        if (!isCurrent()) return [];
+                    }
                 }
-                return selected;
-            } catch (err) {
-                if (err.name === 'AbortError') return [];
+                return selected.sort((a, b) => b.score - a.score || a.turn - b.turn)
+                    .slice(0, SUMMARY_RECALL_LIMIT).sort((a, b) => a.turn - b.turn);
+            } catch (error) {
+                if (signal?.aborted || error.name === 'AbortError') throw error;
+                if (isCurrent()) {
+                    console.warn('[增强记忆] 召回失败：', error.message);
+                    showToast('记忆召回失败，本次仍使用总结上下文', 'warning');
+                }
                 return [];
             }
         };
 
-        const searchVectorMemories = async () => {
-            const query = trimMemoryText(stripVectorMemoryCode(vectorMemorySearchQuery.value), 800);
-            const storyScopeId = getCurrentStoryBranchScopeId();
-            vectorMemorySearchError.value = '';
-            vectorMemorySearchResults.value = [];
-
-            if (!query) {
-                vectorMemorySearchError.value = '先输入一句想查的内容';
-                return;
-            }
-
-            const excludedTurns = getCurrentRetainedVectorMemoryTurns();
-            const vectorMemories = memories.value
-                .filter(m => m.vectorMemory === true && m.enabled !== false)
-                .filter(m => isEmbeddingLike(m.embedding) && m.embedding.length > 0)
-                .filter(memory => {
-                    const turn = Number(memory.turn) || 0;
-                    return turn <= 0 || !excludedTurns.has(turn);
-                });
-            if (vectorMemories.length === 0) {
-                vectorMemorySearchError.value = '还没有可检索的向量分片';
-                return;
-            }
-
-            if (_vectorMemorySearchAbort) {
-                _vectorMemorySearchAbort.abort();
-            }
-            const searchAbort = new AbortController();
-            _vectorMemorySearchAbort = searchAbort;
-            isVectorMemorySearching.value = true;
-            const isCurrentSearch = () => (
-                _vectorMemorySearchAbort === searchAbort
-                && !searchAbort.signal.aborted
-                && getCurrentStoryBranchScopeId() === storyScopeId
-            );
-
-            try {
-                const [queryVector] = await requestMemoryEmbeddings([`用户：${query}`], searchAbort.signal);
-                if (!isCurrentSearch()) return;
-                const scoredMemories = [];
-                for (let i = 0; i < vectorMemories.length; i++) {
-                    if (!isCurrentSearch()) {
-                        const abortErr = new Error('Aborted');
-                        abortErr.name = 'AbortError';
-                        throw abortErr;
-                    }
-                    const memory = vectorMemories[i];
-                    const vectorSearchScore = cosineSimilarity(queryVector, memory.embedding);
-                    if (Number.isFinite(vectorSearchScore) && vectorSearchScore > -1 && passesMemorySimilarityThreshold(vectorSearchScore)) {
-                        scoredMemories.push({ memory, vectorSearchScore });
-                    }
-                    if (i > 0 && i % 512 === 0) await yieldToBrowser();
-                }
-                if (!isCurrentSearch()) return;
-                vectorMemorySearchResults.value = scoredMemories
-                    .sort((a, b) => {
-                        const scoreDiff = b.vectorSearchScore - a.vectorSearchScore;
-                        if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
-                        return (b.memory.turn || 0) - (a.memory.turn || 0);
-                    })
-                    .slice(0, 20)
-                    .map(item => ({
-                        ...item.memory,
-                        vectorSearchScore: item.vectorSearchScore
-                    }))
-                    .sort((a, b) => {
-                        const turnDiff = (a.turn || 0) - (b.turn || 0);
-                        if (turnDiff !== 0) return turnDiff;
-                        return (a.sequence || 0) - (b.sequence || 0);
-                    });
-
-                if (vectorMemorySearchResults.value.length === 0) {
-                    vectorMemorySearchError.value = '没有找到可展示的向量分片';
-                }
-            } catch (err) {
-                if (err.name !== 'AbortError' && isCurrentSearch()) {
-                    vectorMemorySearchError.value = err.message || '向量检索失败';
-                }
-            } finally {
-                if (_vectorMemorySearchAbort === searchAbort) {
-                    _vectorMemorySearchAbort = null;
-                    isVectorMemorySearching.value = false;
-                }
-            }
-        };
-
-        const clearVectorMemorySearch = () => {
-            if (_vectorMemorySearchAbort) {
-                _vectorMemorySearchAbort.abort();
-                _vectorMemorySearchAbort = null;
-            }
-            vectorMemorySearchQuery.value = '';
-            vectorMemorySearchResults.value = [];
-            vectorMemorySearchError.value = '';
-            isVectorMemorySearching.value = false;
-        };
-
         const extractKeywordToolTerms = (query) => {
-            const cleanQuery = trimMemoryText(stripVectorMemoryCode(query), 300);
+            const cleanQuery = trimMemoryText(query, 300);
             if (!cleanQuery) return [];
             const parts = cleanQuery
                 .split(/[\s,，、;；|｜/\\]+/u)
@@ -6247,7 +5508,7 @@ const app = createApp({
             if (!message || typeof message.content !== 'string') return '';
             const parsedData = parseCot(message.content || '');
             const cleanMain = stripUiTemplateContextInjection(parsedData.main || '');
-            return trimMemoryText(stripVectorMemoryCode(stripDisabledImageGenContext(cleanMain)), 5000);
+            return trimMemoryText(stripDisabledImageGenContext(stripNextResponsePrompt(stripUiTemplateUpdateBlock(cleanMain))), 5000);
         };
 
         const buildKeywordToolSnippet = (text, matchedTerms) => {
@@ -6476,29 +5737,54 @@ const app = createApp({
         };
 
         const appendActiveToolResult = (callId, payload) => {
-            if (payload.mode === 'cover' && payload.status === 'ok') {
-                // 保留调用/结果配对，只清掉被新结果取代的资料，避免产生悬空 tool_call_id。
-                activeToolMessages.forEach(message => {
-                    if (message.role === 'tool') message.content = JSON.stringify({ status: 'superseded', replaced_by: callId });
-                });
-            }
             activeToolMessages.push({ role: 'tool', tool_call_id: callId, content: JSON.stringify(payload) });
+        };
+
+        const getRandomToolRangeSize = (min, max) => {
+            const size = max - min + 1;
+            if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max) || min > max || !Number.isSafeInteger(size)) {
+                throw new Error('min 和 max 必须为安全整数，min 不大于 max，范围内整数个数不能超过 9007199254740991');
+            }
+            return size;
+        };
+
+        const generateRandomNumberForTool = (min, max) => {
+            const size = getRandomToolRangeSize(min, max);
+            // 丢弃不能均分到范围内的尾部，避免取余后某些数字更容易出现。
+            const sampleSpace = 2 ** 53;
+            const limit = sampleSpace - (sampleSpace % size);
+            const words = new Uint32Array(2);
+            let sample;
+            do {
+                crypto.getRandomValues(words);
+                sample = (words[0] & 0x1fffff) * 2 ** 32 + words[1];
+            } while (sample >= limit);
+            return { min, max, value: min + sample % size };
         };
 
         const parseNativeActiveToolCall = (call, tools) => {
             const tool = tools.find(item => item.callName === call.function.name);
-            const parsed = { tool, callLabel: call.function.name, query: '', reason: '', mode: 'add', raw: call.function.arguments };
+            const parsed = { tool, callLabel: call.function.name, query: '', reason: '', raw: call.function.arguments };
             try {
                 if (!tool) throw new Error('该工具未开启或不存在');
                 const args = JSON.parse(call.function.arguments);
                 if (!args || typeof args !== 'object' || Array.isArray(args)
-                    || Object.keys(args).some(key => !['query', 'mode', 'reason'].includes(key))
-                    || typeof args.query !== 'string' || !args.query.trim()
-                    || (args.mode !== undefined && !['add', 'cover'].includes(args.mode))
                     || (args.reason !== undefined && typeof args.reason !== 'string')) {
-                    throw new Error('工具参数应为包含非空 query 字符串的 JSON 对象；mode 只能是 add 或 cover，reason 为可选字符串');
+                    throw new Error('工具参数必须为 JSON 对象，reason 为可选字符串');
                 }
-                Object.assign(parsed, { query: args.query.trim(), reason: (args.reason || '').trim(), mode: args.mode || 'add' });
+                if (tool.type === ACTIVE_TOOL_RANDOM_TYPE) {
+                    if (Object.keys(args).some(key => !['min', 'max', 'reason'].includes(key))) {
+                        throw new Error('随机数工具仅接受 min、max 和可选的 reason');
+                    }
+                    getRandomToolRangeSize(args.min, args.max);
+                    Object.assign(parsed, { min: args.min, max: args.max, query: `${args.min} ～ ${args.max}`, reason: (args.reason || '').trim() });
+                } else {
+                    if (Object.keys(args).some(key => !['query', 'reason'].includes(key))
+                        || typeof args.query !== 'string' || !args.query.trim()) {
+                        throw new Error('检索工具仅接受非空 query 字符串和可选的 reason');
+                    }
+                    Object.assign(parsed, { query: args.query.trim(), reason: (args.reason || '').trim() });
+                }
             } catch (error) {
                 parsed.error = error instanceof SyntaxError ? '工具参数不是完整有效的 JSON 对象' : error.message;
             }
@@ -6522,10 +5808,9 @@ const app = createApp({
                     name: parsed.tool?.name || call.function.name || '工具调用',
                     callName: call.function.name,
                     baseCallName: call.function.name,
-                    query: parsed.query || (complete ? '无有效查询' : '正在接收工具参数…'),
+                    query: parsed.query || (complete ? '无有效参数' : '正在接收工具参数…'),
                     raw: parsed.raw,
                     reason: parsed.reason,
-                    mode: parsed.mode,
                     status: complete ? 'queued' : 'receiving'
                 });
             });
@@ -6537,11 +5822,9 @@ const app = createApp({
             id: generateUUID(),
             toolId: toolCall.tool?.id || '',
             toolType: toolCall.tool?.type || '',
-            toolResultCount: toolCall.tool?.resultCount || ACTIVE_TOOL_DEFAULT_RESULT_COUNT,
             name: toolCall.tool?.name || '工具调用',
             callName: toolCall.callLabel || toolCall.tool?.callName || '',
             baseCallName: toolCall.tool?.callName || toolCall.callLabel || '',
-            mode: toolCall.mode || 'add',
             query: toolCall.query || '',
             raw: toolCall.raw,
             reason: cleanActiveToolCallReason(toolCall.reason),
@@ -6566,6 +5849,9 @@ const app = createApp({
             if (toolCall?.toolType === ACTIVE_TOOL_KEYWORD_TYPE || baseCallName === 'tool_grep') {
                 return ACTIVE_TOOL_KEYWORD_TYPE;
             }
+            if (toolCall?.toolType === ACTIVE_TOOL_RANDOM_TYPE || baseCallName === 'tool_random') {
+                return ACTIVE_TOOL_RANDOM_TYPE;
+            }
             return '';
         };
 
@@ -6573,23 +5859,23 @@ const app = createApp({
             const groupKey = getActiveToolUiGroupKey(toolCall);
             if (groupKey === ACTIVE_TOOL_WEB_TYPE) return 'Tavily 联网搜索';
             if (groupKey === ACTIVE_TOOL_KEYWORD_TYPE) return '关键词检索';
+            if (groupKey === ACTIVE_TOOL_RANDOM_TYPE) return '随机数生成';
             return toolCall?.name || '工具调用';
         };
 
         const getToolCallModeText = (toolCall) => {
             const groupKey = getActiveToolUiGroupKey(toolCall);
-            const mode = toolCall?.mode === 'cover' ? 'cover' : 'add';
             const query = String(toolCall?.query || '');
 
             if (groupKey === ACTIVE_TOOL_WEB_TYPE) {
                 const hasUrl = extractWebUrlsFromToolQuery(query).length > 0;
-                if (hasUrl) return mode === 'cover' ? '覆盖网页读取' : '读取网页';
-                return mode === 'cover' ? '覆盖联网搜索' : '联网搜索';
+                return hasUrl ? '读取网页' : '联网搜索';
             }
 
             if (groupKey === ACTIVE_TOOL_KEYWORD_TYPE) {
-                return mode === 'cover' ? '覆盖关键词检索' : '关键词检索';
+                return '关键词检索';
             }
+            if (groupKey === ACTIVE_TOOL_RANDOM_TYPE) return '生成随机数';
             return '工具调用';
         };
 
@@ -6746,28 +6032,31 @@ const app = createApp({
             activeToolHandoffPending.value = false;
             const toolUis = [...requestUis.values()];
             try {
-                if (activeToolDepth >= ACTIVE_TOOL_MAX_AUTO_CONTINUE) throw new Error('已达到本轮检索次数上限');
+                if (activeToolDepth >= ACTIVE_TOOL_MAX_AUTO_CONTINUE) throw new Error('已达到本轮工具调用次数上限');
                 activeToolMessages.push(response.assistantMessage);
-                // 即使接口一次返回多个调用，也逐一配对结果；并发查询，按原始调用顺序应用 add/cover。
+                // 即使接口一次返回多个调用，也逐一配对结果；并发执行，按原始调用顺序追加。
                 const records = await Promise.all(response.toolCalls.map(async (call, position) => {
                     const toolUi = requestUis.get(call.index ?? position);
                     const toolCall = parseNativeActiveToolCall(call, requestTools);
                     let payload;
                     try {
                         if (toolAbort.signal.aborted) throw createAbortReason();
-                        if (position >= 5) throw new Error('单次最多执行 5 项检索，请缩小查询范围');
+                        if (position >= 5) throw new Error('单次最多执行 5 项工具调用');
                         if (toolCall.error) throw new Error(toolCall.error);
                         if (!getEnabledActiveTools().some(tool => tool.callName === call.function.name)) throw new Error('该工具已关闭');
                         toolUi.status = 'running';
-                        const results = isWebActiveTool(toolCall.tool)
-                            ? await searchWebByTavilyForTool(toolCall.query, toolCall.tool, toolAbort.signal)
-                            : searchDialogueByKeywordForTool(toolCall.query, toolCall.tool.resultCount, { excludeMessageId: assistantMessage.id });
+                        const isRandom = toolCall.tool.type === ACTIVE_TOOL_RANDOM_TYPE;
+                        const results = isRandom
+                            ? [generateRandomNumberForTool(toolCall.min, toolCall.max)]
+                            : isWebActiveTool(toolCall.tool)
+                                ? await searchWebByTavilyForTool(toolCall.query, toolCall.tool, toolAbort.signal)
+                                : searchDialogueByKeywordForTool(toolCall.query, toolCall.tool.resultCount, { excludeMessageId: assistantMessage.id });
                         if (toolAbort.signal.aborted) throw createAbortReason();
                         payload = {
                             status: results.length ? 'ok' : 'empty',
                             query: toolCall.query,
-                            mode: toolCall.mode,
                             results,
+                            ...(isRandom ? { operation: 'random' } : {}),
                             ...(results.tavilyMode ? { operation: results.tavilyMode } : {}),
                             ...(results.tavilyFailedResults?.length ? { failed_sources: results.tavilyFailedResults } : {})
                         };
@@ -6775,12 +6064,12 @@ const app = createApp({
                         toolUi.resultCount = results.length;
                     } catch (error) {
                         if (error.name === 'AbortError') throw error;
-                        payload = { status: 'error', query: toolCall.query, mode: toolCall.mode, error: error.message || '工具检索失败' };
+                        payload = { status: 'error', query: toolCall.query, error: error.message || '工具执行失败' };
                         toolUi.status = 'error';
                         toolUi.error = payload.error;
                     }
                     toolUi.resultText = JSON.stringify(payload, null, 2);
-                    console.info('[检索工具]', { 工具: call.function.name, 状态: payload.status, 条数: toolUi.resultCount, ...(payload.error ? { 错误: payload.error } : {}) });
+                    console.info('[工具调用]', { 工具: call.function.name, 状态: payload.status, 条数: toolUi.resultCount, ...(payload.error ? { 错误: payload.error } : {}) });
                     return { callId: call.id, payload };
                 }));
                 if (toolAbort.signal.aborted) throw createAbortReason();
@@ -6835,83 +6124,6 @@ const app = createApp({
             signal?.addEventListener('abort', finish, { once: true });
         });
 
-        const startVectorBatchMemoryExtraction = async (options = {}) => {
-            const { manual = true } = options;
-            if (isBatchExtracting.value || !currentCharacter.value || chatHistory.value.length === 0) return;
-            if (!getMemoryEmbeddingModel()) {
-                if (manual) showToast('请先选择向量嵌入模型', 'warning');
-                return;
-            }
-            const storyScopeId = getCurrentStoryBranchScopeId();
-            const memorySource = memories.value;
-            if (!storyScopeId) return;
-
-            const batchController = new AbortController();
-            _batchExtractAbort = batchController;
-            _vectorBatchRescanRequested = false;
-            isBatchExtracting.value = true;
-            batchExtractProgress.value = { current: 0, total: 0 };
-            let totalAdded = 0;
-
-            try {
-                if (!memorySettings.emptyTurns) memorySettings.emptyTurns = {};
-                const emptyLogKey = getMemoryEmptyTurnsKey(storyScopeId);
-                if (!memorySettings.emptyTurns[emptyLogKey]) memorySettings.emptyTurns[emptyLogKey] = [];
-                const emptyLog = memorySettings.emptyTurns[emptyLogKey];
-
-                while (_batchExtractAbort === batchController && !batchController.signal.aborted) {
-                    if (getCurrentStoryBranchScopeId() !== storyScopeId) break;
-                    _vectorBatchRescanRequested = false;
-                    const snapshot = await ensureConversationMessageIds();
-                    const safeTurns = isConversationBusy.value ? snapshot.turns.slice(0, -1) : snapshot.turns;
-                    const emptyTurnSet = new Set(emptyLog);
-                    const chunks = safeTurns
-                        .filter(turnInfo => !emptyTurnSet.has(turnInfo.turn))
-                        .map(turnInfo => ({
-                            data: turnInfo.messages,
-                            endIdx: turnInfo.endIndex,
-                            turnValue: turnInfo.turn
-                        }));
-                    const scannedTurnCount = safeTurns.length;
-                    const added = chunks.length > 0
-                        ? await _doBatchEmbedMemoryChunks(chunks, batchController.signal, emptyLog, {
-                            interactive: manual,
-                            storyScopeId,
-                            memorySource
-                        })
-                        : 0;
-                    totalAdded += added;
-
-                    if (isConversationBusy.value) {
-                        await waitForMemoryConversationIdle(batchController.signal);
-                        continue;
-                    }
-                    if (getCurrentStoryBranchScopeId() !== storyScopeId) break;
-                    const currentTurnCount = buildConversationTurnSnapshot(chatHistory.value, { includeSystem: false }).turns.length;
-                    if (added > 0 || _vectorBatchRescanRequested || currentTurnCount !== scannedTurnCount) continue;
-                    break;
-                }
-
-                if (_batchExtractAbort === batchController && getCurrentStoryBranchScopeId() === storyScopeId) {
-                    if (totalAdded > 0) {
-                        if (manual) showToast(`向量补录完成：新增 ${totalAdded} 个分片`, 'success');
-                    } else {
-                        if (manual) showNoMemoryNeededModal.value = true;
-                    }
-                }
-            } catch (error) {
-                if (_batchExtractAbort !== batchController) return;
-                if (error.name !== 'AbortError') {
-                    console.error('Vector memory patrol failed:', error);
-                }
-            } finally {
-                if (_batchExtractAbort === batchController) {
-                    _batchExtractAbort = null;
-                    isBatchExtracting.value = false;
-                }
-            }
-        };
-
         const abortClassicBatchExtraction = () => {
             _classicExtractionEpoch++;
             if (_classicBatchExtractAbort) _classicBatchExtractAbort.abort();
@@ -6922,15 +6134,18 @@ const app = createApp({
 
         const abortConversationBackgroundWork = () => {
             abortUiTemplateUpdate();
-            abortVectorBatchExtraction();
             abortClassicBatchExtraction();
         };
 
         const startClassicBatchMemoryExtraction = async (options = {}) => {
             const { manual = true } = options;
             if (isClassicBatchExtracting.value || !currentCharacter.value || chatHistory.value.length === 0) return;
+            if (memorySettings.mode === MEMORY_MODE_ENHANCED && !getMemoryEmbeddingModel()) {
+                if (manual) showToast('增强模式补录必须先选择向量模型', 'warning');
+                return;
+            }
             if (!String(memorySettings.classicModel || '').trim()) {
-                if (manual) showToast('请先选择总结模式副模型', 'warning');
+                if (manual) showToast('请先选择总结模型', 'warning');
                 return;
             }
 
@@ -6941,6 +6156,7 @@ const app = createApp({
             classicBatchExtractProgress.value = { current: 0, total: 0 };
             let totalAdded = 0;
             let secondaryCompressedCount = 0;
+            let indexedCount = 0;
             let foundJobs = false;
 
             try {
@@ -6989,7 +6205,7 @@ const app = createApp({
                             while (true) {
                                 if (retryError.name === 'AbortError') throw retryError;
                                 const retry = await showVueConfirmModal(
-                                    '总结模式补录遇到错误',
+                                    '基础模式补录遇到错误',
                                     `第 ${failed.job.turn} 轮生成失败：\n${retryError.message}\n\n是否立即重试？`
                                 );
                                 if (!retry) throw retryError;
@@ -7012,6 +6228,12 @@ const app = createApp({
                     }
                     const currentTurnCount = buildConversationTurnSnapshot(chatHistory.value, { includeSystem: false }).turns.length;
                     if (jobs.length > 0 || _classicBatchRescanRequested || currentTurnCount !== safeTurnCount) continue;
+                    if (memorySettings.mode === MEMORY_MODE_ENHANCED) {
+                        const added = await indexSummaryMemories(snapshot, batchController.signal);
+                        indexedCount += added;
+                        if (added) foundJobs = true;
+                    }
+                    if (_classicBatchExtractAbort !== batchController || batchController.signal.aborted) break;
                     if (getEligibleClassicSecondaryGroups(currentTurnCount).length > 0) {
                         foundJobs = true;
                         secondaryCompressedCount += await compressEligibleClassicMemories(
@@ -7038,8 +6260,9 @@ const app = createApp({
                         if (manual) {
                             const results = [];
                             if (totalAdded > 0) results.push(`新增 ${totalAdded} 条记忆`);
+                            if (indexedCount > 0) results.push(`补齐 ${indexedCount} 条向量`);
                             if (secondaryCompressedCount > 0) results.push(`二次压缩 ${secondaryCompressedCount} 组`);
-                            showToast(`总结模式补录完成${results.length ? `：${results.join('，')}` : ''}`, 'success');
+                            showToast(`记忆补录完成${results.length ? `：${results.join('，')}` : ''}`, 'success');
                         }
                     } else {
                         if (manual) showNoMemoryNeededModal.value = true;
@@ -7049,7 +6272,8 @@ const app = createApp({
                 if (_classicBatchExtractAbort !== batchController) {
                     return;
                 } else if (error.name !== 'AbortError') {
-                    console.error('Classic memory batch extraction failed:', error);
+                    console.error('[记忆补录] 失败：', error.message);
+                    if (manual) showToast(`补录未完成：${error.message}，已完成的记忆已保留`, 'error');
                 }
             } finally {
                 if (_classicBatchExtractAbort === batchController) {
@@ -7059,39 +6283,21 @@ const app = createApp({
             }
         };
 
-        const startAutomaticMemoryPatrol = (mode = memorySettings.mode) => {
-            if (!memorySettings.enabled || !currentCharacter.value) return Promise.resolve(false);
-            if (mode === MEMORY_MODE_CLASSIC) {
-                if (isClassicBatchExtracting.value) {
-                    _classicBatchRescanRequested = true;
-                    return Promise.resolve(false);
-                }
-                return _classicMemoriesLoaded
-                    ? startClassicBatchMemoryExtraction({ manual: false })
-                    : Promise.resolve(false);
-            }
-            if (isBatchExtracting.value) {
-                _vectorBatchRescanRequested = true;
+        const startAutomaticMemoryPatrol = () => {
+            if (!memorySettings.enabled || !currentCharacter.value || !_classicMemoriesLoaded) return Promise.resolve(false);
+            if (isClassicBatchExtracting.value) {
+                _classicBatchRescanRequested = true;
                 return Promise.resolve(false);
             }
-            return _memoriesLoaded
-                ? startVectorBatchMemoryExtraction({ manual: false })
-                : Promise.resolve(false);
+            return startClassicBatchMemoryExtraction({ manual: false });
         };
 
-        const startBatchMemoryExtraction = () => (
-            memorySettings.mode === MEMORY_MODE_CLASSIC
-                ? startClassicBatchMemoryExtraction({ manual: true })
-                : startVectorBatchMemoryExtraction({ manual: true })
-        );
+        const startBatchMemoryExtraction = () => startClassicBatchMemoryExtraction({ manual: true });
+        const abortBatchExtraction = () => abortClassicBatchExtraction();
 
-        const abortBatchExtraction = () => (
-            memorySettings.mode === MEMORY_MODE_CLASSIC
-                ? abortClassicBatchExtraction()
-                : abortVectorBatchExtraction()
-        );
-
-
+        watch(() => [memorySettings.enabled, memorySettings.mode, memorySettings.classicModel, memorySettings.embeddingModel, settings.apiUrl], () => {
+            abortClassicBatchExtraction();
+        });
 
         // Character Management
         const createNewCharacter = () => {
@@ -7308,9 +6514,6 @@ const app = createApp({
                 .map(name => deleteScopedStoredValue(name, id))));
 
             if (!char?.uuid) return;
-            [char.uuid, ...allBranchScopeIds].forEach(scopeId => {
-                delete memorySettings.emptyTurns?.[getMemoryEmptyTurnsKey(scopeId)];
-            });
             ensureGlobalUiTemplates().forEach(template => {
                 if (!template.runtimeByCharacter) return;
                 [char.uuid, ...allBranchScopeIds].forEach(scopeId => delete template.runtimeByCharacter[scopeId]);
@@ -7345,7 +6548,6 @@ const app = createApp({
             _characterSwitchEpoch++;
             currentCharacterIndex.value = -1;
             chatHistory.value = [];
-            memories.value = [];
             classicMemories.value = [];
             storyBranches.value = [];
             activeStoryBranchId.value = STORY_BRANCH_MAIN_ID;
@@ -7354,9 +6556,7 @@ const app = createApp({
             storyRouteMapDragging.value = false;
             suppressStoryRouteNodeClick = false;
             showStoryBranchModal.value = false;
-            _memoriesLoaded = false;
             _classicMemoriesLoaded = false;
-            clearVectorMemorySearch();
         };
 
         const deleteCharacter = (index) => {
@@ -7667,7 +6867,6 @@ const app = createApp({
             if (!isCurrentRequest()) return false;
             updateCurrentStoryBranchSummary();
             const historySource = chatHistory.value;
-            const vectorMemorySource = memories.value;
             const classicMemorySource = classicMemories.value;
             const branchState = {
                 activeBranchId: activeStoryBranchId.value,
@@ -7675,7 +6874,6 @@ const app = createApp({
             };
             saveGlobalUiTemplateRuntimeForCharacter();
             await saveChatHistoryNow(storyScopeId, historySource);
-            await saveMemoriesNow(storyScopeId, vectorMemorySource);
             await saveClassicMemoriesNow(storyScopeId, classicMemorySource);
             if (!isCurrentRequest()) return false;
             await Promise.all([
@@ -7767,10 +6965,8 @@ const app = createApp({
                         const scopeId = getStoryBranchScopeId(char.uuid, target.id);
                         await Promise.all([
                             deleteScopedStoredValue('chat', scopeId),
-                            deleteScopedStoredValue('memories', scopeId),
                             deleteScopedStoredValue('classic_memories', scopeId)
                         ]);
-                        delete memorySettings.emptyTurns?.[getMemoryEmptyTurnsKey(scopeId)];
                         getUiTemplatesForRuntime(char).forEach(template => {
                             if (!template.runtimeByCharacter) return;
                             delete template.runtimeByCharacter[scopeId];
@@ -7814,7 +7010,6 @@ const app = createApp({
             const previousState = {
                 activeId: activeStoryBranchId.value,
                 chatHistory: chatHistory.value,
-                memories: memories.value,
                 classicMemories: classicMemories.value
             };
             try {
@@ -7827,15 +7022,12 @@ const app = createApp({
                 const branchNumber = storyBranches.value.filter(branch => branch.id !== STORY_BRANCH_MAIN_ID).length + 1;
                 const branchName = `分支 ${branchNumber}`;
                 const now = Date.now();
-                const [loadedChatHistory, sourceMemories, sourceClassicMemories] = await Promise.all([
+                const [loadedChatHistory, sourceClassicMemories] = await Promise.all([
                     loadStoredChatHistory(char, null, parentScopeId),
-                    getScopedStoredValue('memories', parentScopeId),
                     getScopedStoredValue('classic_memories', parentScopeId)
                 ]);
-                const storedMemories = Array.isArray(sourceMemories) ? sourceMemories : [];
                 const storedClassicMemories = Array.isArray(sourceClassicMemories) ? sourceClassicMemories : [];
                 let sourceChatHistory = loadedChatHistory;
-                let branchMemories = storedMemories;
                 let branchClassicMemories = storedClassicMemories;
                 let forkTurn = null;
                 if (forkFromMessage) {
@@ -7847,21 +7039,13 @@ const app = createApp({
                     }
                     sourceChatHistory = loadedChatHistory.slice(0, sourceIndex + 1);
                     forkTurn = buildConversationTurnSnapshot(sourceChatHistory, { includeSystem: false }).turns.length;
-                    branchMemories = storedMemories.filter(memory => Number(memory?.turn) <= forkTurn);
                     branchClassicMemories = trimClassicMemoriesToTurn(storedClassicMemories, forkTurn);
                 }
                 const floorCount = getPostprocessedChatMessages(sourceChatHistory, { includeSystem: false }).length;
                 const wordCount = getConversationBodyLength(sourceChatHistory);
 
                 await setScopedStoredValue('chat', branchScopeId, cloneForStorage(sourceChatHistory), { clone: false });
-                await setScopedStoredValue('memories', branchScopeId, cloneForStorage(branchMemories), { clone: false });
                 await setScopedStoredValue('classic_memories', branchScopeId, cloneForStorage(branchClassicMemories), { clone: false });
-
-                if (!memorySettings.emptyTurns) memorySettings.emptyTurns = {};
-                const sourceEmptyTurns = memorySettings.emptyTurns[getMemoryEmptyTurnsKey(parentScopeId)] || [];
-                memorySettings.emptyTurns[getMemoryEmptyTurnsKey(branchScopeId)] = forkFromMessage
-                    ? sourceEmptyTurns.filter(turn => Number(turn) <= forkTurn)
-                    : [...sourceEmptyTurns];
 
                 getUiTemplatesForRuntime(char).forEach(template => {
                     if (!template.runtimeByCharacter || typeof template.runtimeByCharacter !== 'object') {
@@ -7904,9 +7088,7 @@ const app = createApp({
                 _isApplyingCharacterScopedData = true;
                 resetChatRenderWindow();
                 chatHistory.value = sourceChatHistory;
-                memories.value = branchMemories.length ? prepareMemoriesForRuntime(branchMemories) : [];
                 classicMemories.value = prepareClassicMemoriesForRuntime(branchClassicMemories);
-                _memoriesLoaded = true;
                 _classicMemoriesLoaded = true;
                 clearStoryBranchTransientContext();
                 finishApplyingCharacterScopedData();
@@ -7918,16 +7100,13 @@ const app = createApp({
                     storyBranches.value = storyBranches.value.filter(branch => branch.id !== createdBranch.branchId);
                     activeStoryBranchId.value = previousState.activeId;
                     chatHistory.value = previousState.chatHistory;
-                    memories.value = previousState.memories;
                     classicMemories.value = previousState.classicMemories;
-                    delete memorySettings.emptyTurns?.[getMemoryEmptyTurnsKey(createdBranch.branchScopeId)];
                     getUiTemplatesForRuntime(char).forEach(template => {
                         if (template.runtimeByCharacter) delete template.runtimeByCharacter[createdBranch.branchScopeId];
                     });
                     loadGlobalUiTemplateRuntimeForCharacter(char);
                     await Promise.allSettled([
                         deleteScopedStoredValue('chat', createdBranch.branchScopeId),
-                        deleteScopedStoredValue('memories', createdBranch.branchScopeId),
                         deleteScopedStoredValue('classic_memories', createdBranch.branchScopeId),
                         saveStoryBranchesForCharacter(char),
                         saveMemorySettingsNow(),
@@ -7953,9 +7132,8 @@ const app = createApp({
             try {
                 if (!await saveCurrentStoryBranchState()) return;
                 const targetScopeId = getStoryBranchScopeId(char.uuid, branchId);
-                const [loadedChatHistory, savedMemories, savedClassicMemories] = await Promise.all([
+                const [loadedChatHistory, savedClassicMemories] = await Promise.all([
                     loadStoredChatHistory(char, null, targetScopeId),
-                    getScopedStoredValue('memories', targetScopeId),
                     getScopedStoredValue('classic_memories', targetScopeId)
                 ]);
 
@@ -7963,9 +7141,7 @@ const app = createApp({
                 activeStoryBranchId.value = branchId;
                 resetChatRenderWindow();
                 chatHistory.value = loadedChatHistory;
-                memories.value = savedMemories?.length ? prepareMemoriesForRuntime(savedMemories) : [];
                 classicMemories.value = prepareClassicMemoriesForRuntime(savedClassicMemories);
-                _memoriesLoaded = true;
                 _classicMemoriesLoaded = true;
                 loadGlobalUiTemplateRuntimeForCharacter(char);
                 clearStoryBranchTransientContext();
@@ -7999,18 +7175,6 @@ const app = createApp({
         };
 
         const readCharacterMemories = async (characterId, errorContext = '') => {
-            let vectorMemories = [];
-            let vectorLoaded = false;
-            try {
-                const savedMemories = await getScopedStoredValue('memories', characterId);
-                vectorMemories = savedMemories?.length
-                    ? prepareMemoriesForRuntime(savedMemories)
-                    : [];
-                vectorLoaded = true;
-            } catch (error) {
-                console.error(`Error loading memories${errorContext}:`, error);
-            }
-
             let summaryMemories = [];
             let summaryLoaded = false;
             try {
@@ -8020,20 +7184,17 @@ const app = createApp({
             } catch (error) {
                 console.error(`Error loading classic memories${errorContext}:`, error);
             }
-            return { vectorMemories, summaryMemories, vectorLoaded, summaryLoaded };
+            return { summaryMemories, summaryLoaded };
         };
 
         const loadCharacterMemories = async (characterId, errorContext = '') => {
             const loadEpoch = _characterSwitchEpoch;
-            _memoriesLoaded = false;
             _classicMemoriesLoaded = false;
             const loaded = await readCharacterMemories(characterId, errorContext);
             if (loadEpoch !== _characterSwitchEpoch || getCurrentStoryBranchScopeId() !== characterId) {
                 return loaded;
             }
-            memories.value = loaded.vectorMemories;
             classicMemories.value = loaded.summaryMemories;
-            _memoriesLoaded = loaded.vectorLoaded;
             _classicMemoriesLoaded = loaded.summaryLoaded;
             return loaded;
         };
@@ -8075,11 +7236,9 @@ const app = createApp({
             if (!isLatestSwitch()) return;
             abortUiTemplateUpdate();
             const previousCharacterIndex = currentCharacterIndex.value;
-            abortVectorBatchExtraction();
             abortClassicBatchExtraction();
             if (previousCharacterIndex !== -1 && !await saveCurrentStoryBranchState(switchEpoch)) return;
             if (!isLatestSwitch()) return;
-            clearVectorMemorySearch();
 
             let branchState;
             let loadedChatHistory;
@@ -8115,9 +7274,7 @@ const app = createApp({
                 loadGlobalUiTemplateRuntimeForCharacter(char);
             }
             chatHistory.value = loadedChatHistory;
-            memories.value = loadedMemories.vectorMemories;
             classicMemories.value = loadedMemories.summaryMemories;
-            _memoriesLoaded = loadedMemories.vectorLoaded;
             _classicMemoriesLoaded = loadedMemories.summaryLoaded;
 
             // Load Character Specific Data
@@ -8817,9 +7974,10 @@ const app = createApp({
         });
 
         onBeforeUnmount(() => {
+            activeSortable?.destroy();
             generatedImageObserver?.disconnect();
             generatedImageTasks.clear();
-            closeMobileMenu();
+            closeNavigation();
             document.removeEventListener('fullscreenchange', syncChatFullscreenState);
             document.removeEventListener('webkitfullscreenchange', syncChatFullscreenState);
             if (window.visualViewport) {
@@ -8924,38 +8082,14 @@ const app = createApp({
             });
         };
 
-        const activeKeepFloors = computed(() => (
-            memorySettings.mode === MEMORY_MODE_CLASSIC
-                ? memorySettings.summaryKeepFloors
-                : memorySettings.vectorKeepFloors
-        ));
-        const keepFloorsSliderMin = computed(() => (
-            memorySettings.mode === MEMORY_MODE_CLASSIC
-                ? SUMMARY_KEEP_FLOORS_MIN
-                : VECTOR_KEEP_FLOORS_MIN
-        ));
-        const keepFloorsSliderMax = computed(() => (
-            memorySettings.mode === MEMORY_MODE_CLASSIC
-                ? SUMMARY_KEEP_FLOORS_MAX
-                : VECTOR_KEEP_FLOORS_MAX
-        ));
+        const activeKeepFloors = computed(() => memorySettings.summaryKeepFloors);
+        const keepFloorsSliderMin = SUMMARY_KEEP_FLOORS_MIN;
+        const keepFloorsSliderMax = SUMMARY_KEEP_FLOORS_MAX;
         const keepFloorsSlider = computed({
-            get: () => activeKeepFloors.value,
-            set: (value) => {
-                if (memorySettings.mode === MEMORY_MODE_CLASSIC) {
-                    memorySettings.summaryKeepFloors = normalizeKeepFloors(
-                        value,
-                        SUMMARY_KEEP_FLOORS_MIN,
-                        SUMMARY_KEEP_FLOORS_MAX,
-                        SUMMARY_KEEP_FLOORS_DEFAULT
-                    );
-                    return;
-                }
-                memorySettings.vectorKeepFloors = normalizeKeepFloors(
-                    value,
-                    VECTOR_KEEP_FLOORS_MIN,
-                    VECTOR_KEEP_FLOORS_MAX,
-                    VECTOR_KEEP_FLOORS_DEFAULT
+            get: () => memorySettings.summaryKeepFloors,
+            set: value => {
+                memorySettings.summaryKeepFloors = normalizeKeepFloors(
+                    value, SUMMARY_KEEP_FLOORS_MIN, SUMMARY_KEEP_FLOORS_MAX, SUMMARY_KEEP_FLOORS_DEFAULT
                 );
             }
         });
@@ -9017,17 +8151,7 @@ const app = createApp({
             const start = (classicMemoryPage.value - 1) * LIST_PAGE_SIZE;
             return sortedMemories.slice(start, start + LIST_PAGE_SIZE);
         });
-        const memoryStats = computed(() => {
-            const vectorMemories = memories.value.filter(isVectorMemory);
-            const vector = vectorMemories.length;
-            const classic = classicMemories.value.length;
-            const vectorTurns = new Set(vectorMemories.map(memory => memory.turn).filter(Boolean)).size;
-            return {
-                vector,
-                vectorTurns,
-                activeTotal: memorySettings.mode === MEMORY_MODE_CLASSIC ? classic : vector
-            };
-        });
+        const memoryStats = computed(() => ({ activeTotal: classicMemories.value.length }));
 
         const applyPersonPresetSelection = (person) => {
             user.person = person === 'third' ? 'third' : 'second';
@@ -9063,7 +8187,7 @@ const app = createApp({
             updateModalRef, latestUpdateConfig,
             showConfirmModal, confirmMessage, modelMode, isGeminiModel, isTruncationEnabled, isPresetEnabled, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, showNoMemoryNeededModal, // Export for template
             isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingCardInteraction, clearPendingCardInteraction, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
-            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontFamilyOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, regexScripts, worldInfo,
+            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontFamilyOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, getSortableItemKey, regexScripts, worldInfo,
             activeTools, activeToolAggressivenessOptions: ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS, editingActiveTool, normalizeActiveTools, isWebActiveTool, getActiveToolDisplayDescription, getActiveToolResultCountMin, getActiveToolResultCountMax,
             getToolCallModeText, hasThinkingOrTools, isMessageThinkingOrRunning, isThinkingSummaryOpen, toggleThinkingSummary, markThinkingSummaryDetailOpened, getTimelineSteps,
             isStyleFilterDetailsOpen, toggleStyleFilterDetails, getStyleFilterHitSegments,
@@ -9079,60 +8203,34 @@ const app = createApp({
             quotaValue, quotaLoading, quotaError,
             // Memory System Exports
             classicMemoryPage, classicMemoryPageCount, memorySettings, retryingClassicMemoryId, retryClassicMemory,
-            isAnyMemoryProcessing: computed(() => isBatchExtracting.value || isClassicBatchExtracting.value),
-            isActiveBatchExtracting: computed(() => memorySettings.mode === MEMORY_MODE_CLASSIC ? isClassicBatchExtracting.value : isBatchExtracting.value),
-            activeBatchExtractProgress: computed(() => memorySettings.mode === MEMORY_MODE_CLASSIC ? classicBatchExtractProgress.value : batchExtractProgress.value),
-            vectorMemorySearchQuery, vectorMemorySearchResults, vectorMemorySearchError, vectorMemorySearchSortMode, isVectorMemorySearching,
-            startBatchMemoryExtraction, abortBatchExtraction, searchVectorMemories, clearVectorMemorySearch,
+            isAnyMemoryProcessing: isClassicBatchExtracting,
+            isActiveBatchExtracting: isClassicBatchExtracting,
+            activeBatchExtractProgress: classicBatchExtractProgress,
+            startBatchMemoryExtraction, abortBatchExtraction,
             activeKeepFloors, keepFloorsSlider, keepFloorsSliderMin, keepFloorsSliderMax,
             // 滑块值映射：4-10 为变量分析消息层数。
             uiTemplateAnalysisDepthSlider: computed({
                 get: () => Math.max(4, Math.min(10, Number(settings.uiTemplateAnalysisDepth) || 4)),
                 set: (val) => { settings.uiTemplateAnalysisDepth = Math.max(4, Math.min(10, Number(val) || 4)); }
             }),
-            displayedVectorMemorySearchResults: computed(() => {
-                const result = [...vectorMemorySearchResults.value];
-                if (vectorMemorySearchSortMode.value === 'score') {
-                    return result.sort((a, b) => {
-                        const scoreDiff = (b.vectorSearchScore || 0) - (a.vectorSearchScore || 0);
-                        if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
-                        const turnDiff = (a.turn || 0) - (b.turn || 0);
-                        if (turnDiff !== 0) return turnDiff;
-                        return (a.sequence || 0) - (b.sequence || 0);
-                    });
-                }
-                return result.sort((a, b) => {
-                    const turnDiff = (a.turn || 0) - (b.turn || 0);
-                    if (turnDiff !== 0) return turnDiff;
-                    return (a.sequence || 0) - (b.sequence || 0);
-                });
-            }),
             displayedClassicMemories,
             memoryStats,
             clearAllMemories: () => {
-                const isClassicMode = memorySettings.mode === MEMORY_MODE_CLASSIC;
-                const modeName = isClassicMode ? '总结模式' : '向量记忆';
-                confirmAction(`确定要清空所有${modeName}吗？此操作无法撤销。`, async () => {
-                    if (isClassicMode) {
-                        abortClassicBatchExtraction();
-                        classicMemories.value = [];
-                        await saveClassicMemoriesNow();
-                    } else {
-                        abortVectorBatchExtraction();
-                        memories.value = [];
-                        await saveMemoriesNow();
-                    }
-                    showToast(`${modeName}已清空`, 'success');
+                confirmAction('确定要清空所有总结记忆及其向量吗？两个模式共享这些记忆，此操作无法撤销。', async () => {
+                    abortClassicBatchExtraction();
+                    classicMemories.value = [];
+                    await saveClassicMemoriesNow();
+                    showToast('记忆已清空', 'success');
                 });
             },
-            toggleMobileMenu, closeMobileMenu,
+            toggleNavigation, closeNavigation,
             fetchModels, selectModel, selectQuickModels, sendMessage, autoResizeInput, handleChatInputFocus, handleChatInputBlur, stopGeneration, clearChat, toggleChatFullscreen,
             handleConfirm, handleCancel, // Export handlers
             copyMessage, playMessageActionFeedback, canDeleteMessage, deleteMessage, regenerateMessage,
             editMessage, saveEditMessage, cancelEditMessage,
             createNewCharacter, editCharacter, saveCharacter, deleteCharacter, selectCharacter, toggleCharacterFavorite, isCharacterFavorite,
             currentUiTemplates, activeUiTemplates, uiTemplateUpdateStatus, createUiTemplate, editUiTemplate, saveUiTemplate, deleteUiTemplate, importUiTemplates, updateUiTemplatesFromChat, renderEditingUiTemplatePreview, handleUiTemplateClick,
-            isBatchDeleteMode, isSidebarCollapsed, isOnlineNavOpen, toggleOnlineNav, isAdvancedNavOpen, toggleAdvancedNav, selectedCharacterIndices, toggleBatchDeleteMode, toggleCharacterSelection, batchDeleteCharacters,
+            isBatchDeleteMode, isNavigationOpen, selectedCharacterIndices, toggleBatchDeleteMode, toggleCharacterSelection, batchDeleteCharacters,
             handleAvatarUpload, importCharacter,
             createPreset, editPreset, savePreset, deletePreset,
             renderMarkdown, messageUsesWideLayout, parseCot, closeCharacterEditor: () => showCharacterEditor.value = false,
