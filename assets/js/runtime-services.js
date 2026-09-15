@@ -56,6 +56,9 @@
         };
 
         const sanitizeMarkdown = (text) => DOMPurify.sanitize(marked.parse(text), cleanConfig);
+        const markdownOnlyRenderer = new marked.Renderer();
+        markdownOnlyRenderer.html = token => String(typeof token === 'string' ? token : token.text)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const createIframe = (html) => createExecutableHtmlIframe(html, 'border-t border-gray-200 shadow-sm');
 
         const replaceHtmlCodeBlocks = (documentNode) => {
@@ -96,12 +99,16 @@
             return modified;
         };
 
-        const renderMarkdown = (text, role = 'assistant', skipRegex = false) => {
+        const renderMarkdown = (text, role = 'assistant', skipRegex = false, allowHtml = true) => {
             if (!text) return '';
-            const cacheKey = `${role}_${skipRegex}_${text}`;
+            const cacheKey = `${role}_${skipRegex}_${allowHtml}_${text}`;
             if (renderedCache.has(cacheKey)) return renderedCache.get(cacheKey);
 
             let processed = applyDisplayRegex(text, role, skipRegex);
+            if (!allowHtml) {
+                const html = DOMPurify.sanitize(marked.parse(processed, { renderer: markdownOnlyRenderer }));
+                return cacheValue(renderedCache, cacheKey, html);
+            }
             const trimmed = processed.trim();
             const htmlMatch = trimmed.match(/(<!doctype html>|<html\b[^>]*>)/i);
 

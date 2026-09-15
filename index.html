@@ -536,7 +536,7 @@
                                                                                 :class="{ 'timeline-thinking-detail': step.type === 'thinking' }">
                                                                                 <div v-if="step.type === 'thinking'" class="markdown-body"
                                                                                     :style="settings.fontSize ? { fontSize: (settings.fontSize - 1.5) + 'px' } : {}"
-                                                                                    v-html="renderMarkdown(step.text, 'assistant', true)">
+                                                                                    v-html="renderMarkdown(step.text, 'assistant', true, false)">
                                                                                 </div>
                                                                                 <div v-else class="tool-call-detail flex flex-col gap-3 text-[13px]">
                                                                                     <div class="flex justify-between items-center text-[13px] border-b border-gray-200 pb-2">

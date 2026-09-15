@@ -6010,7 +6010,7 @@ const app = createApp({
             }
 
             // 3. 分析过程 (CoT)
-            const cotText = String(cotInfo.cot || '').trim();
+            const cotText = String(cotInfo.rawCot || '').trim();
             if (cotText) {
                 steps.push({
                     id: 'cot-reasoning',
