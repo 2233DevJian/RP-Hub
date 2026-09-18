@@ -965,7 +965,7 @@ window.RPHubUtils = {
                 id: 'sta1n',
                 name: 'STA1N API',
                 apiUrl: 'https://cdn.sta1n.cn/v1',
-                icon: 'https://picui.ogmua.cn/s1/2026/08/21/6a87a751bf871.webp'
+                icon: 'https://img.cdn1.vip/i/6a11f4d96fa99_1779561689.webp'
             }),
             Object.freeze({
                 id: 'deepseek',

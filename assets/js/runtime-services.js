@@ -56,6 +56,9 @@
         };
 
         const sanitizeMarkdown = (text) => DOMPurify.sanitize(marked.parse(text), cleanConfig);
+        const markdownOnlyRenderer = new marked.Renderer();
+        markdownOnlyRenderer.html = token => String(typeof token === 'string' ? token : token.text)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const createIframe = (html) => createExecutableHtmlIframe(html, 'border-t border-gray-200 shadow-sm');
 
         const replaceHtmlCodeBlocks = (documentNode) => {
@@ -96,12 +99,16 @@
             return modified;
         };
 
-        const renderMarkdown = (text, role = 'assistant', skipRegex = false) => {
+        const renderMarkdown = (text, role = 'assistant', skipRegex = false, allowHtml = true) => {
             if (!text) return '';
-            const cacheKey = `${role}_${skipRegex}_${text}`;
+            const cacheKey = `${role}_${skipRegex}_${allowHtml}_${text}`;
             if (renderedCache.has(cacheKey)) return renderedCache.get(cacheKey);
 
             let processed = applyDisplayRegex(text, role, skipRegex);
+            if (!allowHtml) {
+                const html = DOMPurify.sanitize(marked.parse(processed, { renderer: markdownOnlyRenderer }));
+                return cacheValue(renderedCache, cacheKey, html);
+            }
             const trimmed = processed.trim();
             const htmlMatch = trimmed.match(/(<!doctype html>|<html\b[^>]*>)/i);
 
@@ -369,9 +376,7 @@
         getMainDb,
         getStorageLogicalKey,
         globalUiTemplates,
-        memorySettings,
         readStorageKeys,
-        saveMemorySettings,
         saveStoredValue,
         scanStorageEntries,
         scopedStorageNames,
@@ -380,8 +385,7 @@
         const categories = Object.freeze([
             { key: 'characters', label: '角色卡', color: '#2563eb' },
             { key: 'chat', label: '聊天记录', color: '#3b82f6' },
-            { key: 'vector', label: '向量记忆', color: '#0ea5e9' },
-            { key: 'classic', label: '总结记忆', color: '#38bdf8' },
+            { key: 'classic', label: '记忆系统', color: '#38bdf8' },
             { key: 'other', label: '其他', color: '#94a3b8' }
         ]);
         const storageStats = reactive({
@@ -395,7 +399,7 @@
             orphanedItems: 0,
             categories: []
         });
-        let unusedSnapshot = { mainKeys: [], legacyKeys: [], emptyTurnKeys: [], templateRuntimeKeys: [] };
+        let unusedSnapshot = { mainKeys: [], legacyKeys: [], templateRuntimeKeys: [] };
 
         const formatStorageSize = (bytes) => {
             const size = Math.max(0, Number(bytes) || 0);
@@ -419,7 +423,6 @@
         const getStorageCategory = (logicalKey) => {
             if (logicalKey === 'characters') return 'characters';
             if (logicalKey.startsWith('chat_')) return 'chat';
-            if (logicalKey.startsWith('memories_')) return 'vector';
             if (logicalKey.startsWith('classic_memories_')) return 'classic';
             return 'other';
         };
@@ -465,6 +468,8 @@
                     .filter(logicalKey => getScopedStorageInfo(logicalKey)));
                 const liveCharacterIds = new Set(characters.value.map(character => character?.uuid).filter(Boolean));
                 const isOrphanedEntry = (source, logicalKey) => {
+                    // 旧正文分片已停用，仅在用户确认清理时删除。
+                    if (logicalKey.startsWith('memories_')) return true;
                     if (source === 'legacy' && mainLogicalKeys.has(logicalKey)) return true;
                     const scoped = getScopedStorageInfo(logicalKey);
                     if (!scoped || liveCharacterIds.has(getBranchOwnerId(scoped.id))) return false;
@@ -489,8 +494,6 @@
                 await scanStorageEntries(getMainDb(), 'main', inspectEntry);
                 await scanStorageEntries(getLegacyDb(), 'legacy', inspectEntry);
 
-                const emptyTurnKeys = Object.keys(memorySettings.emptyTurns || {})
-                    .filter(key => key.endsWith(':vector') && !liveCharacterIds.has(getBranchOwnerId(key.slice(0, -7))));
                 const templateRuntimeKeys = [];
                 globalUiTemplates.value.forEach((template, templateIndex) => {
                     Object.keys(template.runtimeByCharacter || {}).forEach(characterId => {
@@ -499,9 +502,7 @@
                         }
                     });
                 });
-                const embeddedOrphanBytes = emptyTurnKeys.reduce((total, key) => (
-                    total + estimateStorageEntrySize(key, memorySettings.emptyTurns[key])
-                ), 0) + templateRuntimeKeys.reduce((total, item) => (
+                const embeddedOrphanBytes = templateRuntimeKeys.reduce((total, item) => (
                     total + estimateStorageEntrySize(
                         item.characterId,
                         globalUiTemplates.value[item.templateIndex]?.runtimeByCharacter?.[item.characterId]
@@ -524,14 +525,13 @@
                 storageStats.quota = Number(estimate.quota) || 0;
                 storageStats.orphanedBytes = (orphanedEntryBytes + embeddedOrphanBytes) * sizeScale;
                 storageStats.orphanedItems = orphanedKeys.main.length + orphanedKeys.legacy.length
-                    + emptyTurnKeys.length + templateRuntimeKeys.length;
+                    + templateRuntimeKeys.length;
                 storageStats.categories = categories
                     .map(category => ({ ...category, bytes: (categoryBytes.get(category.key) || 0) * sizeScale }))
                     .filter(category => category.bytes > 0);
                 unusedSnapshot = {
                     mainKeys: orphanedKeys.main,
                     legacyKeys: orphanedKeys.legacy,
-                    emptyTurnKeys,
                     templateRuntimeKeys
                 };
                 storageStats.hasMeasured = true;
@@ -541,7 +541,7 @@
                 storageStats.orphanedBytes = 0;
                 storageStats.orphanedItems = 0;
                 storageStats.categories = [];
-                unusedSnapshot = { mainKeys: [], legacyKeys: [], emptyTurnKeys: [], templateRuntimeKeys: [] };
+                unusedSnapshot = { mainKeys: [], legacyKeys: [], templateRuntimeKeys: [] };
             } finally {
                 storageStats.loading = false;
             }
@@ -557,7 +557,6 @@
             const snapshot = {
                 mainKeys: [...unusedSnapshot.mainKeys],
                 legacyKeys: [...unusedSnapshot.legacyKeys],
-                emptyTurnKeys: [...unusedSnapshot.emptyTurnKeys],
                 templateRuntimeKeys: unusedSnapshot.templateRuntimeKeys.map(item => ({ ...item }))
             };
             const orphanedBytes = storageStats.orphanedBytes;
@@ -571,13 +570,11 @@
                             deleteStorageKeys(getMainDb(), snapshot.mainKeys),
                             deleteStorageKeys(getLegacyDb(), snapshot.legacyKeys)
                         ]);
-                        snapshot.emptyTurnKeys.forEach(key => delete memorySettings.emptyTurns?.[key]);
                         snapshot.templateRuntimeKeys.forEach(({ templateIndex, characterId }) => {
                             const runtime = globalUiTemplates.value[templateIndex]?.runtimeByCharacter;
                             if (runtime) delete runtime[characterId];
                         });
                         await Promise.all([
-                            saveMemorySettings(),
                             saveStoredValue('global_ui_templates', globalUiTemplates.value)
                         ]);
                         await refreshStorageStats();
