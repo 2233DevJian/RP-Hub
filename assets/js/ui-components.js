@@ -964,10 +964,6 @@
                                 </button>
                             </div>
                         </div>
-                        <div class="flex shrink-0 items-center justify-between gap-3 border-y border-gray-100 bg-gray-50/60 px-4 py-2 text-xs text-gray-500 sm:px-5">
-                            <span>模型列表 <span class="ml-1 font-semibold tabular-nums text-gray-700">{{ models.length }}</span></span>
-                            <span v-if="target === 'quickModels'">正在设置槽位 {{ activeSlot + 1 }}</span>
-                        </div>
                         <div class="model-selector-list min-h-0 flex-1 overflow-y-auto overscroll-contain bg-gray-50/40 p-3 custom-scrollbar sm:p-4">
                             <div v-if="models.length === 0" class="flex min-h-full flex-col items-center justify-center gap-3 py-8 text-sm text-gray-500">
                                 <svg class="h-9 w-9 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
