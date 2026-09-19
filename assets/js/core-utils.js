@@ -988,7 +988,7 @@ window.RPHubUtils = {
         ]),
         activeTools: window.RPHubBuiltinContent.activeTools,
         uiOptions: Object.freeze({
-            popularModelFamilies: Object.freeze(['claude', 'gemini', 'deepseek', 'llama', 'glm', 'minimax', 'moonshot', 'grok']),
+            popularModelFamilies: Object.freeze(['claude', 'gemini', 'deepseek', 'llama', 'glm', 'moonshot', 'grok']),
             presetRoles: Object.freeze([
                 { value: 'system', label: '系统提示词' },
                 { value: 'user', label: 'User消息' },

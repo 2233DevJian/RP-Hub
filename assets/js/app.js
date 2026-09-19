@@ -26,7 +26,7 @@ const {
     RetryConfirmModal,
     SettingsHelp,
     SettingsPageHeader,
-    StatusNoticeModal,
+    MemoryBackfillModal,
     StoryBranchModal,
     TokenUsageView,
     UiTemplatesView,
@@ -185,7 +185,7 @@ const app = createApp({
         RollingText,
         SettingsHelp,
         SettingsPageHeader,
-        StatusNoticeModal,
+        MemoryBackfillModal,
         StoryBranchModal,
         TokenUsageView,
         UiTemplatesView,
@@ -318,7 +318,7 @@ const app = createApp({
         const showConfirmModal = ref(false);
         const confirmMessage = ref('');
         const confirmCallback = ref(null);
-        const showNoMemoryNeededModal = ref(false);
+        const showMemoryBackfillModal = ref(false);
         const isGenerating = ref(false);
         const isRemoteGenerating = ref(false); // 新增：远程生成状态
         const remoteEstimatedTime = ref(null); // 新增：远程预计时间
@@ -564,7 +564,6 @@ const app = createApp({
             apiProviderId: DEFAULT_API_PROVIDER_ID,
             apiProviderKeys: {},
             customApiUrl: '',
-            customApiUrl2: '',
             model: DEFAULT_API_CONFIG.qualityModel,
             contextSize: MAX_CONTEXT_SIZE,
             temperature: 1.0,
@@ -620,15 +619,8 @@ const app = createApp({
             apiUrl: '',
             icon: ''
         };
-        const customApiProviderOption2 = {
-            id: 'custom2',
-            name: '自定义2',
-            apiUrl: '',
-            icon: ''
-        };
-        const customApiProviderOptions = [customApiProviderOption, customApiProviderOption2];
-        const isCustomApiProviderId = (id) => customApiProviderOptions.some(provider => provider.id === id);
-        const getCustomApiUrlKey = (id) => id === 'custom2' ? 'customApiUrl2' : 'customApiUrl';
+        const customApiProviderOptions = [customApiProviderOption];
+        const isCustomApiProviderId = (id) => id === 'custom';
         const normalizeApiProviderUrl = (url) => String(url || '').replace(/\/+$/, '').toLowerCase();
         const getApiProviderById = (id) => apiProviderOptions.find(provider => provider.id === id);
         const getApiProviderByUrl = (url) => {
@@ -642,13 +634,20 @@ const app = createApp({
             }
             settings.apiProviderKeys[providerId] = settings.apiKey || '';
             if (isCustomApiProviderId(providerId)) {
-                settings[getCustomApiUrlKey(providerId)] = settings.apiUrl || '';
+                settings.customApiUrl = settings.apiUrl || '';
             }
         };
-        const normalizeApiProviderSettings = () => {
+        const normalizeApiProviderSettings = (savedSettings = settings) => {
             if (!settings.apiProviderKeys || typeof settings.apiProviderKeys !== 'object' || Array.isArray(settings.apiProviderKeys)) {
                 settings.apiProviderKeys = {};
             }
+            // 将旧的当前自定义2配置并入唯一的自定义入口。
+            if (settings.apiProviderId === 'custom2') {
+                settings.apiProviderId = 'custom';
+                settings.customApiUrl = savedSettings.customApiUrl2 || settings.apiUrl || '';
+                settings.apiProviderKeys.custom = settings.apiKey || settings.apiProviderKeys.custom2 || '';
+            }
+            delete settings.apiProviderKeys.custom2;
             [...apiProviderOptions, ...customApiProviderOptions].forEach(provider => {
                 if (typeof settings.apiProviderKeys[provider.id] !== 'string') {
                     settings.apiProviderKeys[provider.id] = '';
@@ -661,9 +660,8 @@ const app = createApp({
                 settings.apiProviderId = provider?.id || DEFAULT_API_PROVIDER_ID;
             }
             if (isCustomApiProviderId(settings.apiProviderId)) {
-                const urlKey = getCustomApiUrlKey(settings.apiProviderId);
-                settings[urlKey] = settings[urlKey] || settings.apiUrl || '';
-                settings.apiUrl = settings[urlKey];
+                settings.customApiUrl = settings.customApiUrl || settings.apiUrl || '';
+                settings.apiUrl = settings.customApiUrl;
             } else {
                 provider = getApiProviderById(settings.apiProviderId) || getApiProviderById(DEFAULT_API_PROVIDER_ID);
                 settings.apiProviderId = provider.id;
@@ -677,10 +675,7 @@ const app = createApp({
             settings.apiKey = settings.apiProviderKeys[settings.apiProviderId] || '';
         };
         const selectedApiProvider = computed(() => {
-            const customProvider = customApiProviderOptions.find(provider => (
-                provider.id === settings.apiProviderId || provider.id === selectedApiProviderId.value
-            ));
-            if (customProvider) return customProvider;
+            if (isCustomApiProviderId(settings.apiProviderId) || isCustomApiProviderId(selectedApiProviderId.value)) return customApiProviderOption;
             const selectedProvider = getApiProviderById(settings.apiProviderId) || getApiProviderById(selectedApiProviderId.value);
             if (selectedProvider) return selectedProvider;
             return getApiProviderByUrl(settings.apiUrl) || customApiProviderOption;
@@ -691,7 +686,7 @@ const app = createApp({
             selectedApiProviderId.value = provider.id;
             settings.apiProviderId = provider.id;
             settings.apiUrl = isCustomApiProviderId(provider.id)
-                ? settings[getCustomApiUrlKey(provider.id)] || ''
+                ? settings.customApiUrl || ''
                 : provider.apiUrl;
             settings.apiKey = settings.apiProviderKeys[provider.id] || '';
             showApiProviderSelector.value = false;
@@ -710,7 +705,7 @@ const app = createApp({
 
         watch(() => settings.apiUrl, (newUrl) => {
             if (isCustomApiProviderId(settings.apiProviderId)) {
-                settings[getCustomApiUrlKey(settings.apiProviderId)] = newUrl || '';
+                settings.customApiUrl = newUrl || '';
             }
         });
 
@@ -811,7 +806,7 @@ const app = createApp({
                     ...customApiProviderOptions.map(({ id, name }) => ({
                         id,
                         name,
-                        apiUrl: settings[getCustomApiUrlKey(id)] || '',
+                        apiUrl: settings.customApiUrl || '',
                         icon: ''
                     }))
                 ];
@@ -822,8 +817,7 @@ const app = createApp({
                         apiProviderId: settings.apiProviderId,
                         apiProviderKeys: JSON.parse(JSON.stringify(settings.apiProviderKeys || {})),
                         apiKey: settings.apiKey,
-                        customApiUrl: settings.customApiUrl,
-                        customApiUrl2: settings.customApiUrl2
+                        customApiUrl: settings.customApiUrl
                     },
                     providers
                 }, '*');
@@ -1138,7 +1132,7 @@ const app = createApp({
             classicConcurrency: CLASSIC_MEMORY_DEFAULT_CONCURRENCY
         });
         const isClassicBatchExtracting = ref(false);
-        const classicBatchExtractProgress = ref({ current: 0, total: 0 });
+        const memoryBackfillProgress = ref({ status: 'idle', message: '', phase: '', stages: [] });
         const retryingClassicMemoryId = ref('');
         let _isApplyingCharacterScopedData = false;
         let _classicMemoriesLoaded = false;
@@ -1755,7 +1749,7 @@ const app = createApp({
                         settings.apiProviderId = legacyProvider?.id || (savedSettings.apiUrl ? 'custom' : DEFAULT_API_PROVIDER_ID);
                         if (!legacyProvider && savedSettings.apiUrl) settings.customApiUrl = savedSettings.apiUrl;
                     }
-                    normalizeApiProviderSettings();
+                    normalizeApiProviderSettings(savedSettings);
                 } else {
                     normalizeApiProviderSettings();
                 }
@@ -3809,7 +3803,7 @@ const app = createApp({
                 await saveConversationMutationNow();
                 await saveMemorySettingsNow();
                 if (affectedTurn && memorySettings.enabled) {
-                    nextTick(() => extractMemoryFromChat());
+                    nextTick(startAutomaticMemoryPatrol);
                 }
                 showToast('消息已保存', 'success');
             }
@@ -4953,9 +4947,7 @@ const app = createApp({
 
                 // 记忆提取：在对话正常完成后异步提取记忆（用户取消时不触发）
                 if (hasCompletedTurns && memorySettings.enabled) {
-                    nextTick(() => {
-                        extractMemoryFromChat();
-                    });
+                    nextTick(startAutomaticMemoryPatrol);
                 }
             }
         };
@@ -5120,12 +5112,12 @@ const app = createApp({
                 .filter(sourceMemory => Number(sourceMemory.turn) <= lastTurn);
         });
 
-        const getEligibleClassicSecondaryGroups = (totalTurns) => {
+        const getEligibleClassicSecondaryGroups = (totalTurns, memories = classicMemories.value) => {
             const compressionLimit = Math.max(0, Number(totalTurns) - CLASSIC_SECONDARY_KEEP_TURNS);
             if (compressionLimit < CLASSIC_SECONDARY_GROUP_SIZE) return [];
             const { turns } = buildConversationTurnSnapshot(chatHistory.value, { includeSystem: false });
             const byTurn = new Map();
-            classicMemories.value.forEach(memory => {
+            memories.forEach(memory => {
                 const turn = Number(memory?.turn);
                 if (!isSecondaryClassicMemory(memory) && turn > 0 && turn <= compressionLimit) byTurn.set(turn, memory);
             });
@@ -5143,7 +5135,7 @@ const app = createApp({
             return groups;
         };
 
-        const compressEligibleClassicMemories = async (totalTurns, signal, interactive = false) => {
+        const compressEligibleClassicMemories = async (totalTurns, signal, interactive = false, onProgress) => {
             const groups = getEligibleClassicSecondaryGroups(totalTurns);
             if (!groups.length) return 0;
             const characterId = currentCharacter.value?.uuid;
@@ -5152,7 +5144,7 @@ const app = createApp({
             const concurrency = normalizeClassicMemoryConcurrency(memorySettings.classicConcurrency);
             let completed = 0;
             let memorySourceForSave = null;
-            classicBatchExtractProgress.value = { current: 0, total: groups.length };
+            onProgress?.(0, groups.length);
             try {
                 for (let offset = 0; offset < groups.length; offset += concurrency) {
                     if (signal?.aborted || epoch !== _classicExtractionEpoch
@@ -5163,8 +5155,6 @@ const app = createApp({
                             return { group, summary: await requestClassicSecondarySummary(group, signal) };
                         } catch (error) {
                             return { group, error };
-                        } finally {
-                            classicBatchExtractProgress.value.current++;
                         }
                     }));
                     if (signal?.aborted || epoch !== _classicExtractionEpoch
@@ -5182,6 +5172,7 @@ const app = createApp({
                                         '基础模式补录遇到错误',
                                         `第 ${range} 轮二次压缩失败：\n${retryError.message}\n\n是否立即重试？`
                                     );
+                                    if (signal?.aborted || epoch !== _classicExtractionEpoch) throw createAbortReason();
                                     if (!retry) {
                                         const abortError = new Error('用户取消了重试并中止了二次压缩');
                                         abortError.name = 'AbortError';
@@ -5231,6 +5222,7 @@ const app = createApp({
                         ];
                         memorySourceForSave = classicMemories.value;
                         completed++;
+                        onProgress?.(completed, groups.length);
                     }
                     if (failed) break;
                 }
@@ -5337,9 +5329,10 @@ const app = createApp({
         const generateAndStoreClassicMemory = async (job, signal) => {
             if (!job || job.epoch !== _classicExtractionEpoch) return false;
             if (currentCharacter.value?.uuid !== job.characterId || getCurrentStoryBranchScopeId() !== job.storyScopeId || hasClassicMemoryForJob(job)) return false;
-            if (_classicSummaryInFlightKeys.has(job.key)) return false;
+            const inFlightKey = `${job.epoch}:${job.key}`;
+            if (_classicSummaryInFlightKeys.has(inFlightKey)) return false;
 
-            _classicSummaryInFlightKeys.add(job.key);
+            _classicSummaryInFlightKeys.add(inFlightKey);
             try {
                 const summary = await requestClassicMemorySummary(job, signal);
                 if (signal?.aborted || job.epoch !== _classicExtractionEpoch) return false;
@@ -5359,11 +5352,9 @@ const app = createApp({
                 }));
                 return true;
             } finally {
-                _classicSummaryInFlightKeys.delete(job.key);
+                _classicSummaryInFlightKeys.delete(inFlightKey);
             }
         };
-
-        const extractMemoryFromChat = () => startAutomaticMemoryPatrol();
 
         const requestMemoryEmbeddings = async (inputs, signal, model = getMemoryEmbeddingModel()) => {
             if (!settings.apiUrl || !settings.apiKey) throw new Error('请先配置 API 地址和 Key');
@@ -5403,17 +5394,12 @@ const app = createApp({
             memory.embeddingModel === model && memory.embeddingApiUrl === apiUrl
             && getSummaryEmbedding(memory).length > 0;
 
-        const indexSummaryMemories = async (snapshot, signal, sources = getSummarySources(classicMemories.value)) => {
+        const getSummaryEmbeddingJobs = (snapshot, sources = getSummarySources(classicMemories.value)) => {
             const model = getMemoryEmbeddingModel();
             const apiUrl = settings.apiUrl;
-            const epoch = _classicExtractionEpoch;
-            const scopeId = getCurrentStoryBranchScopeId();
-            const isCurrent = () => !signal?.aborted && epoch === _classicExtractionEpoch
-                && scopeId === getCurrentStoryBranchScopeId()
-                && memorySettings.mode === MEMORY_MODE_ENHANCED;
             const messagesById = new Map(chatHistory.value.filter(message => message.id).map(message => [message.id, message]));
             const turnsByNumber = new Map(snapshot.turns.map(turn => [turn.turn, turn]));
-            const jobs = sources.map(memory => {
+            return sources.map(memory => {
                 const inputs = (memory.sourceUserIds || []).map(id => messagesById.get(id))
                     .filter(message => message?.role === 'user').map(message => String(message.content || ''));
                 const turn = turnsByNumber.get(Number(memory.turn));
@@ -5423,9 +5409,20 @@ const app = createApp({
             }).filter(({ memory, sourceUserText }) =>
                 !hasCurrentSummaryEmbedding(memory, model, apiUrl) || sourceUserText !== memory.sourceUserText
             );
+        };
+
+        const indexSummaryMemories = async (snapshot, signal, sources, onProgress) => {
+            const model = getMemoryEmbeddingModel();
+            const apiUrl = settings.apiUrl;
+            const epoch = _classicExtractionEpoch;
+            const scopeId = getCurrentStoryBranchScopeId();
+            const isCurrent = () => !signal?.aborted && epoch === _classicExtractionEpoch
+                && scopeId === getCurrentStoryBranchScopeId()
+                && memorySettings.mode === MEMORY_MODE_ENHANCED;
+            const jobs = getSummaryEmbeddingJobs(snapshot, sources);
             if (!jobs.length) return 0;
             if (!model) throw new Error('请先选择向量模型');
-            classicBatchExtractProgress.value = { current: 0, total: jobs.length };
+            onProgress?.(0, jobs.length);
             let completed = 0;
             for (let offset = 0; offset < jobs.length; offset += SUMMARY_EMBEDDING_BATCH_SIZE) {
                 if (!isCurrent()) return completed;
@@ -5451,7 +5448,7 @@ const app = createApp({
                 });
                 classicMemories.value = [...classicMemories.value];
                 await saveClassicMemoriesNow(scopeId, classicMemories.value);
-                classicBatchExtractProgress.value.current = completed;
+                if (isCurrent()) onProgress?.(completed, jobs.length);
             }
             return completed;
         };
@@ -6130,6 +6127,10 @@ const app = createApp({
             _classicBatchExtractAbort = null;
             _classicBatchRescanRequested = false;
             isClassicBatchExtracting.value = false;
+            if (memoryBackfillProgress.value.status === 'running') {
+                memoryBackfillProgress.value.status = 'stopped';
+                memoryBackfillProgress.value.message = '已停止补录，已完成的记忆已保留。';
+            }
         };
 
         const abortConversationBackgroundWork = () => {
@@ -6139,13 +6140,22 @@ const app = createApp({
 
         const startClassicBatchMemoryExtraction = async (options = {}) => {
             const { manual = true } = options;
-            if (isClassicBatchExtracting.value || !currentCharacter.value || chatHistory.value.length === 0) return;
+            if (isClassicBatchExtracting.value) return;
+            memoryBackfillProgress.value = { status: 'running', message: '正在检查待补录记忆…', phase: '', stages: [] };
+            const progress = memoryBackfillProgress.value;
+            if (!currentCharacter.value || chatHistory.value.length === 0) {
+                progress.status = 'done';
+                progress.message = '当前没有可补录的对话。';
+                return;
+            }
             if (memorySettings.mode === MEMORY_MODE_ENHANCED && !getMemoryEmbeddingModel()) {
-                if (manual) showToast('增强模式补录必须先选择向量模型', 'warning');
+                progress.status = 'error';
+                progress.message = '请先在记忆系统设置中选择向量模型。';
                 return;
             }
             if (!String(memorySettings.classicModel || '').trim()) {
-                if (manual) showToast('请先选择总结模型', 'warning');
+                progress.status = 'error';
+                progress.message = '请先在记忆系统设置中选择总结模型。';
                 return;
             }
 
@@ -6153,11 +6163,25 @@ const app = createApp({
             _classicBatchExtractAbort = batchController;
             _classicBatchRescanRequested = false;
             isClassicBatchExtracting.value = true;
-            classicBatchExtractProgress.value = { current: 0, total: 0 };
-            let totalAdded = 0;
-            let secondaryCompressedCount = 0;
-            let indexedCount = 0;
-            let foundJobs = false;
+            progress.stages = [
+                { key: 'summary', title: '逐轮总结', unit: '轮' },
+                { key: 'vector', title: '向量记忆', unit: '条' },
+                { key: 'secondary', title: '二次压缩', unit: '组' }
+            ].map(stage => ({ ...stage, current: 0, total: 0, elapsedMs: 0 }));
+            const stageProgress = key => {
+                const stage = progress.stages.find(item => item.key === key);
+                const previous = stage.current;
+                const previousElapsed = stage.elapsedMs;
+                const startedAt = Date.now();
+                return (current, total) => {
+                    if (!total || _classicBatchExtractAbort !== batchController || batchController.signal.aborted) return;
+                    progress.phase = key;
+                    progress.message = '';
+                    stage.current = previous + current;
+                    stage.total = previous + total;
+                    stage.elapsedMs = previousElapsed + Date.now() - startedAt;
+                };
+            };
 
             try {
                 while (_classicBatchExtractAbort === batchController && !batchController.signal.aborted) {
@@ -6171,14 +6195,22 @@ const app = createApp({
                         .slice(0, safeTurnCount)
                         .map((_, index) => buildClassicSummaryJob(snapshot, index))
                         .filter(job => job && !hasClassicMemoryForJob(job));
-                    if (jobs.length > 0) {
-                        foundJobs = true;
-                        classicBatchExtractProgress.value = { current: 0, total: jobs.length };
-                    }
+                    const remaining = {
+                        summary: jobs.length,
+                        vector: memorySettings.mode === MEMORY_MODE_ENHANCED
+                            ? getSummaryEmbeddingJobs(snapshot).length + jobs.length : 0,
+                        secondary: getEligibleClassicSecondaryGroups(safeTurnCount, [...classicMemories.value, ...jobs]).length
+                    };
+                    progress.stages.forEach(stage => { stage.total = stage.current + remaining[stage.key]; });
+                    const reportSummary = stageProgress('summary');
+                    let summarized = 0;
+                    reportSummary(0, jobs.length);
 
                     const runClassicJob = async job => {
                         try {
-                            return { job, added: await generateAndStoreClassicMemory(job, batchController.signal) };
+                            const added = await generateAndStoreClassicMemory(job, batchController.signal);
+                            if (added || hasClassicMemoryForJob(job)) reportSummary(++summarized, jobs.length);
+                            return { job, added };
                         } catch (error) {
                             return { job, error };
                         }
@@ -6187,18 +6219,10 @@ const app = createApp({
                     for (let offset = 0; offset < jobs.length; offset += concurrency) {
                         if (_classicBatchExtractAbort !== batchController || batchController.signal.aborted) break;
                         const group = jobs.slice(offset, offset + concurrency);
-                        const results = await Promise.all(group.map(async job => {
-                            const result = await runClassicJob(job);
-                            if (_classicBatchExtractAbort === batchController && !batchController.signal.aborted) {
-                                classicBatchExtractProgress.value.current++;
-                            }
-                            return result;
-                        }));
+                        const results = await Promise.all(group.map(runClassicJob));
                         if (_classicBatchExtractAbort !== batchController || batchController.signal.aborted) break;
 
-                        const groupAdded = results.filter(result => result.added).length;
-                        totalAdded += groupAdded;
-                        if (groupAdded > 0) await saveClassicMemoriesNow();
+                        if (results.some(result => result.added)) await saveClassicMemoriesNow();
                         for (const failed of results.filter(result => result.error)) {
                             if (!manual) throw failed.error;
                             let retryError = failed.error;
@@ -6208,11 +6232,11 @@ const app = createApp({
                                     '基础模式补录遇到错误',
                                     `第 ${failed.job.turn} 轮生成失败：\n${retryError.message}\n\n是否立即重试？`
                                 );
+                                if (_classicBatchExtractAbort !== batchController || batchController.signal.aborted) return;
                                 if (!retry) throw retryError;
                                 const retryResult = await runClassicJob(failed.job);
                                 if (!retryResult.error) {
                                     if (retryResult.added) {
-                                        totalAdded++;
                                         await saveClassicMemoriesNow();
                                     }
                                     break;
@@ -6223,27 +6247,26 @@ const app = createApp({
                     }
 
                     if (isConversationBusy.value) {
+                        progress.message = '等待当前回复结束后继续补录。';
                         await waitForMemoryConversationIdle(batchController.signal);
                         continue;
                     }
                     const currentTurnCount = buildConversationTurnSnapshot(chatHistory.value, { includeSystem: false }).turns.length;
                     if (jobs.length > 0 || _classicBatchRescanRequested || currentTurnCount !== safeTurnCount) continue;
                     if (memorySettings.mode === MEMORY_MODE_ENHANCED) {
-                        const added = await indexSummaryMemories(snapshot, batchController.signal);
-                        indexedCount += added;
-                        if (added) foundJobs = true;
+                        await indexSummaryMemories(snapshot, batchController.signal, undefined,
+                            stageProgress('vector'));
                     }
                     if (_classicBatchExtractAbort !== batchController || batchController.signal.aborted) break;
-                    if (getEligibleClassicSecondaryGroups(currentTurnCount).length > 0) {
-                        foundJobs = true;
-                        secondaryCompressedCount += await compressEligibleClassicMemories(
-                            currentTurnCount,
-                            batchController.signal,
-                            manual
-                        );
-                    }
+                    await compressEligibleClassicMemories(
+                        currentTurnCount,
+                        batchController.signal,
+                        manual,
+                        stageProgress('secondary')
+                    );
                     if (_classicBatchExtractAbort !== batchController || batchController.signal.aborted) break;
                     if (isConversationBusy.value) {
+                        progress.message = '等待当前回复结束后继续补录。';
                         await waitForMemoryConversationIdle(batchController.signal);
                         continue;
                     }
@@ -6256,25 +6279,17 @@ const app = createApp({
                 }
 
                 if (_classicBatchExtractAbort === batchController) {
-                    if (foundJobs) {
-                        if (manual) {
-                            const results = [];
-                            if (totalAdded > 0) results.push(`新增 ${totalAdded} 条记忆`);
-                            if (indexedCount > 0) results.push(`补齐 ${indexedCount} 条向量`);
-                            if (secondaryCompressedCount > 0) results.push(`二次压缩 ${secondaryCompressedCount} 组`);
-                            showToast(`记忆补录完成${results.length ? `：${results.join('，')}` : ''}`, 'success');
-                        }
-                    } else {
-                        if (manual) showNoMemoryNeededModal.value = true;
-                    }
+                    const incomplete = progress.stages.some(stage => stage.current < stage.total);
+                    progress.status = incomplete ? 'error' : 'done';
+                    progress.message = incomplete ? '部分任务未完成，已完成的记忆已保留，可再次补录。'
+                        : progress.stages.some(stage => stage.total > 0) ? '' : '当前没有需要补录的记忆。';
                 }
             } catch (error) {
-                if (_classicBatchExtractAbort !== batchController) {
-                    return;
-                } else if (error.name !== 'AbortError') {
-                    console.error('[记忆补录] 失败：', error.message);
-                    if (manual) showToast(`补录未完成：${error.message}，已完成的记忆已保留`, 'error');
-                }
+                if (_classicBatchExtractAbort !== batchController) return;
+                progress.status = error.name === 'AbortError' ? 'stopped' : 'error';
+                progress.message = error.name === 'AbortError' ? '已停止补录，已完成的记忆已保留。'
+                    : `补录未完成：${error.message}。已完成的记忆已保留。`;
+                if (error.name !== 'AbortError') console.error('[记忆补录] 失败：', error.message);
             } finally {
                 if (_classicBatchExtractAbort === batchController) {
                     _classicBatchExtractAbort = null;
@@ -6292,8 +6307,10 @@ const app = createApp({
             return startClassicBatchMemoryExtraction({ manual: false });
         };
 
-        const startBatchMemoryExtraction = () => startClassicBatchMemoryExtraction({ manual: true });
-        const abortBatchExtraction = () => abortClassicBatchExtraction();
+        const startBatchMemoryExtraction = () => {
+            showMemoryBackfillModal.value = true;
+            return startClassicBatchMemoryExtraction({ manual: true });
+        };
 
         watch(() => [memorySettings.enabled, memorySettings.mode, memorySettings.classicModel, memorySettings.embeddingModel, settings.apiUrl], () => {
             abortClassicBatchExtraction();
@@ -8185,7 +8202,7 @@ const app = createApp({
             storageStats, refreshStorageStats, cleanupUnusedStorage, formatStorageSize,
             showCharacterExportModal, openCharacterExportModal, confirmCharacterExport, // Character Export Modal
             updateModalRef, latestUpdateConfig,
-            showConfirmModal, confirmMessage, modelMode, isGeminiModel, isTruncationEnabled, isPresetEnabled, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, showNoMemoryNeededModal, // Export for template
+            showConfirmModal, confirmMessage, modelMode, isGeminiModel, isTruncationEnabled, isPresetEnabled, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, // Export for template
             isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingCardInteraction, clearPendingCardInteraction, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
             user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontFamilyOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, getSortableItemKey, regexScripts, worldInfo,
             activeTools, activeToolAggressivenessOptions: ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS, editingActiveTool, normalizeActiveTools, isWebActiveTool, getActiveToolDisplayDescription, getActiveToolResultCountMin, getActiveToolResultCountMax,
@@ -8203,10 +8220,9 @@ const app = createApp({
             quotaValue, quotaLoading, quotaError,
             // Memory System Exports
             classicMemoryPage, classicMemoryPageCount, memorySettings, retryingClassicMemoryId, retryClassicMemory,
-            isAnyMemoryProcessing: isClassicBatchExtracting,
             isActiveBatchExtracting: isClassicBatchExtracting,
-            activeBatchExtractProgress: classicBatchExtractProgress,
-            startBatchMemoryExtraction, abortBatchExtraction,
+            showMemoryBackfillModal, memoryBackfillProgress,
+            startBatchMemoryExtraction, abortBatchExtraction: abortClassicBatchExtraction,
             activeKeepFloors, keepFloorsSlider, keepFloorsSliderMin, keepFloorsSliderMax,
             // 滑块值映射：4-10 为变量分析消息层数。
             uiTemplateAnalysisDepthSlider: computed({

@@ -715,13 +715,17 @@ ${closingInstruction}
 
 // --- Update announcement (keep this section at the bottom) ---
 window.RPHubLatestUpdate = Object.freeze({
-    id: 10213,
+    id: 10214,
     title: '网站公告',
     content: `
-### RP-Hub 1.9.6 Preview
+### RP-Hub 1.9.6 
 
-- 解决Gemini模型预设标记问题
+- 新增夜间模式
+- 新增记忆补录进度查看
+- 重构设置界面UI
+- 优化了模型选择界面
+- 修复了移动端模型选择界面UI错位的问题
 
-#### 更新时间：09/17/13:27
+#### 更新时间：09/19/23:15
     `
 });
