@@ -2,11 +2,11 @@
 :root[data-app-theme="light"] { color-scheme: light; }
 :root[data-app-theme="dark"] {
     color-scheme: dark;
-    --night-canvas: #2e2e2e;
-    --night-surface: #373737;
-    --night-raised: #444444;
-    --night-field: #303030;
-    --night-border: #474747;
+    --night-canvas: #2b2b2b;
+    --night-surface: #343434;
+    --night-raised: #414141;
+    --night-field: #2d2d2d;
+    --night-border: #444444;
     --night-text: #e4e4e4;
     --night-secondary: #c2c2c2;
     --night-muted: #afafaf;
@@ -16,9 +16,9 @@
     --night-primary-hover: #5079e4;
     --night-selected: #2b4b7b;
     /* DaisyUI tokens keep the workshop's controls, dialogs and feedback in one palette. */
-    --b1: 34% 0 0;
-    --b2: 31% 0 0;
-    --b3: 38% 0 0;
+    --b1: 33.2% 0 0;
+    --b2: 30.2% 0 0;
+    --b3: 37.2% 0 0;
     --bc: 91% 0 0;
     --p: 74% 0.13 253;
     --pc: 19% 0.025 257;
@@ -82,7 +82,7 @@
 :root[data-app-theme="dark"] .app-navigation-brand > span { color: var(--night-text); }
 :root[data-app-theme="dark"] .app-navigation-brand em { color: #94b4e4; }
 :root[data-app-theme="dark"] :is(.app-navigation-panel, .app-nav-trigger--embedded) {
-    background: linear-gradient(145deg, rgba(78,78,78,.82), rgba(48,48,48,.68) 65%, rgba(66,66,66,.78));
+    background: linear-gradient(145deg, rgba(75,75,75,.82), rgba(45,45,45,.68) 65%, rgba(63,63,63,.78));
     border-color: rgba(255,255,255,.16); color: var(--night-text);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.17), inset 0 -1px 0 rgba(255,255,255,.04), 0 24px 64px -18px rgba(0,0,0,.55);
 }
@@ -93,7 +93,7 @@
 :root[data-app-theme="dark"] .app-navigation-item.is-current { background: var(--night-selected); color: #f1f6ff; border-color: #5b87cb; }
 :root[data-app-theme="dark"] .app-navigation-item.is-current .app-navigation-icon { color: #a7c6ff; }
 :root[data-app-theme="dark"] .app-navigation-user { background: rgba(178,178,178,.07); border-color: rgba(194,194,194,.14); }
-:root[data-app-theme="dark"] .settings-view { background: radial-gradient(ellipse at 30% 0, #3a3a3a, transparent 65%), var(--night-canvas); }
+:root[data-app-theme="dark"] .settings-view { background: radial-gradient(ellipse at 30% 0, #373737, transparent 65%), var(--night-canvas); }
 :root[data-app-theme="dark"] :is(.settings-card, .settings-toggle-row, .model-setting-row, .settings-card__header) { border-color: var(--night-border); }
 :root[data-app-theme="dark"] :is(.settings-card, .model-setting-row, .settings-action, .settings-model-button, .settings-icon-button, .settings-create-button,
     .compact-modal-panel, .modal-secondary-button, .pagination-button, .sortable-list-item, .model-selector-heading,
@@ -101,9 +101,9 @@
     .story-route-enter-button, .story-route-edit-button, .story-route-delete-button, .message-placement) {
     background: var(--night-surface); border-color: var(--night-border); color: var(--night-text);
 }
-:root[data-app-theme="dark"] .settings-card { background: linear-gradient(145deg, #414141, var(--night-surface)); box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 8px 24px -16px rgba(0,0,0,.5); }
+:root[data-app-theme="dark"] .settings-card { background: linear-gradient(145deg, #3e3e3e, var(--night-surface)); box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 8px 24px -16px rgba(0,0,0,.5); }
 :root[data-app-theme="dark"] body :is(.app-modal-panel, .modal-box) {
-    background: linear-gradient(145deg, rgba(75,75,75,.95), rgba(58,58,58,.94)) !important;
+    background: linear-gradient(145deg, rgba(72,72,72,.95), rgba(55,55,55,.94)) !important;
     border-color: rgba(255,255,255,.16) !important;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 24px 72px -16px rgba(0,0,0,.6);
 }
@@ -132,16 +132,16 @@
 :root[data-app-theme="dark"] .message-placement.is-selected .message-placement-check { background: #4073bd; }
 
 /* Chat surfaces and generated-image chrome; covers and generated images are never inverted. */
-:root[data-app-theme="dark"] :is(.msg-bubble-glass, .typing-bubble, .input-island, .desc-panel, .toast-item) { background-color: rgba(55,55,55,.86) !important; border-color: rgba(255,255,255,.13) !important; color: var(--night-text); }
+:root[data-app-theme="dark"] :is(.msg-bubble-glass, .typing-bubble, .input-island, .desc-panel, .toast-item) { background-color: rgba(52,52,52,.86) !important; border-color: rgba(255,255,255,.13) !important; color: var(--night-text); }
 .msg-bubble-glass[class~="bg-blue-50/85"] { --bubble-rgb: 239,246,255; }
 .msg-bubble-glass[class~="bg-red-50/70"] { --bubble-rgb: 254,242,242; }
-:root[data-app-theme="dark"] .msg-bubble-glass { --bubble-rgb: 55,55,55; }
+:root[data-app-theme="dark"] .msg-bubble-glass { --bubble-rgb: 52,52,52; }
 :root[data-app-theme="dark"] .msg-bubble-glass[class~="bg-red-50/70"] { --bubble-rgb: 66,44,58; }
-:root[data-app-theme="dark"] .msg-bubble-glass[class~="bg-blue-50/85"] { --bubble-rgb: 70,70,70; background-color: rgba(70,70,70,.86) !important; border-color: rgba(255,255,255,.13) !important; box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+:root[data-app-theme="dark"] .msg-bubble-glass[class~="bg-blue-50/85"] { --bubble-rgb: 67,67,67; background-color: rgba(67,67,67,.86) !important; border-color: rgba(255,255,255,.13) !important; box-shadow: 0 4px 12px rgba(0,0,0,.12); }
 :root[data-app-theme] .msg-bubble-glass:not(:has(.ui-template-render, .markdown-body > :is(div, section, article, aside, header, footer, table, iframe))) {
     background-color: rgba(var(--bubble-rgb, 255,255,255), .9) !important;
 }
-:root[data-app-theme="dark"] :is(.msg-name-tag, .typing-timer-badge, .message-action-bar) { background-color: rgba(55,55,55,.9) !important; border-color: var(--night-border) !important; color: var(--night-secondary); }
+:root[data-app-theme="dark"] :is(.msg-name-tag, .typing-timer-badge, .message-action-bar) { background-color: rgba(52,52,52,.9) !important; border-color: var(--night-border) !important; color: var(--night-secondary); }
 :root[data-app-theme="dark"] :is(.message-action-button, .message-style-filter-button) { color: var(--night-secondary); }
 :root[data-app-theme="dark"] :is(.message-action-button:hover, .message-style-filter-button.is-active) { background: #314661; color: #b5d0ff; }
 :root[data-app-theme="dark"] :is(.cot-ui, .cot-ui.is-open, .cot-header) { background: var(--night-surface); border-color: var(--night-border); color: var(--night-secondary); }
@@ -158,9 +158,9 @@
 :root[data-app-theme="dark"] :is(.ui-template-render, .ui-template-preview) { filter: brightness(.9); }
 :root[data-app-theme="dark"] .ui-template-pending-card { background: linear-gradient(135deg, var(--night-raised), var(--night-surface)); border-color: var(--night-border); color: var(--night-text); }
 :root[data-app-theme="dark"] :is(.ui-template-pending-icon, .ui-template-pending-icon .live-dots) { background: #364359; color: #9cbfff; }
-:root[data-app-theme="dark"] .character-deck__backdrop { background: #232323; }
-:root[data-app-theme="dark"] .character-deck__backdrop::after { background: linear-gradient(180deg, rgba(24,24,24,.7), rgba(24,24,24,.4) 50%, rgba(24,24,24,.75)); }
-:root[data-app-theme="dark"] .character-deck__arrow { background: rgba(49,49,49,.95); color: var(--night-text); border-color: var(--night-border); }
+:root[data-app-theme="dark"] .character-deck__backdrop { background: #202020; }
+:root[data-app-theme="dark"] .character-deck__backdrop::after { background: linear-gradient(180deg, rgba(21,21,21,.7), rgba(21,21,21,.4) 50%, rgba(21,21,21,.75)); }
+:root[data-app-theme="dark"] .character-deck__arrow { background: rgba(46,46,46,.95); color: var(--night-text); border-color: var(--night-border); }
 
 /* Novel editor keeps its reading character while sharing the same night surfaces. */
 :root[data-app-theme="dark"] :is([class~="bg-[#f5f5f0]"], [class~="bg-[#e8e8e3]"]) { background-color: var(--night-canvas) !important; }
@@ -175,12 +175,12 @@
 :root[data-app-theme="dark"] .from-primary-50 { --tw-gradient-from: var(--night-tint); --tw-gradient-to: transparent; }
 :root[data-app-theme="dark"] :is(.to-blue-50, .to-purple-50) { --tw-gradient-to: var(--night-raised); }
 :root[data-app-theme="dark"] .from-white { --tw-gradient-from: var(--night-surface); --tw-gradient-to: transparent; }
-:root[data-app-theme="dark"] .via-white\/80 { --tw-gradient-stops: var(--tw-gradient-from), rgba(55,55,55,.8), var(--tw-gradient-to); }
-:root[data-app-theme="dark"] [class~="hover:bg-white/10"]:hover { background-color: rgba(55,55,55,.1) !important; }
-:root[data-app-theme="dark"] :is([class~="bg-white/20"], [class~="hover:bg-white/20"]:hover) { background-color: rgba(55,55,55,.2) !important; }
-:root[data-app-theme="dark"] :is([class~="bg-white/40"], [class~="active:bg-white/40"]:active) { background-color: rgba(55,55,55,.4) !important; }
-:root[data-app-theme="dark"] [class~="bg-white/50"] { background-color: rgba(55,55,55,.5) !important; }
-:root[data-app-theme="dark"] :is([class~="bg-white/60"], [class~="hover:bg-white/60"]:hover) { background-color: rgba(55,55,55,.6) !important; }
+:root[data-app-theme="dark"] .via-white\/80 { --tw-gradient-stops: var(--tw-gradient-from), rgba(52,52,52,.8), var(--tw-gradient-to); }
+:root[data-app-theme="dark"] [class~="hover:bg-white/10"]:hover { background-color: rgba(52,52,52,.1) !important; }
+:root[data-app-theme="dark"] :is([class~="bg-white/20"], [class~="hover:bg-white/20"]:hover) { background-color: rgba(52,52,52,.2) !important; }
+:root[data-app-theme="dark"] :is([class~="bg-white/40"], [class~="active:bg-white/40"]:active) { background-color: rgba(52,52,52,.4) !important; }
+:root[data-app-theme="dark"] [class~="bg-white/50"] { background-color: rgba(52,52,52,.5) !important; }
+:root[data-app-theme="dark"] :is([class~="bg-white/60"], [class~="hover:bg-white/60"]:hover) { background-color: rgba(52,52,52,.6) !important; }
 
 :root[data-app-theme="dark"] [class~="bg-blue-100"],
 :root[data-app-theme="dark"] [class~="bg-blue-50"],
@@ -268,20 +268,20 @@
 }
 
 :root[data-app-theme="dark"] [class~="bg-white/70"] {
-    background-color: rgba(55,55,55,0.7) !important;
+    background-color: rgba(52,52,52,0.7) !important;
 }
 
 :root[data-app-theme="dark"] [class~="bg-white/80"],
 :root[data-app-theme="dark"] [class~="hover:bg-white/80"]:hover {
-    background-color: rgba(55,55,55,0.8) !important;
+    background-color: rgba(52,52,52,0.8) !important;
 }
 
 :root[data-app-theme="dark"] [class~="bg-white/90"] {
-    background-color: rgba(55,55,55,0.9) !important;
+    background-color: rgba(52,52,52,0.9) !important;
 }
 
 :root[data-app-theme="dark"] [class~="bg-white/95"] {
-    background-color: rgba(55,55,55,0.95) !important;
+    background-color: rgba(52,52,52,0.95) !important;
 }
 
 :root[data-app-theme="dark"] [class~="border-blue-100"],
