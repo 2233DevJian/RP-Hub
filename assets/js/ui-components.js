@@ -325,7 +325,7 @@
             window.RPHubUpdateCheck.useUpdateCheck();
             const isDark = ref(window.RPHubTheme.current === 'dark');
             const syncTheme = event => { isDark.value = event.detail === 'dark'; };
-            const toggleTheme = event => window.RPHubTheme.set(isDark.value ? 'light' : 'dark', event.currentTarget);
+            const toggleTheme = () => window.RPHubTheme.set(isDark.value ? 'light' : 'dark');
             onMounted(() => window.addEventListener('rphub-theme-change', syncTheme));
             onBeforeUnmount(() => window.removeEventListener('rphub-theme-change', syncTheme));
             const panel = ref(null);
