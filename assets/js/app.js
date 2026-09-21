@@ -7821,6 +7821,7 @@ const app = createApp({
             // 1.7.5 Enforce Default Preset (文风（抗八股）)
             syncBuiltinPreset(BUILTIN_PRESETS.writingStyle);
             syncBuiltinPreset(BUILTIN_PRESETS.storyPanels);
+            syncBuiltinPreset(BUILTIN_PRESETS.lifelike);
 
             // 1.7.5.1 固定 NSFW增强在文风预设之后
             syncBuiltinPreset(BUILTIN_PRESETS.nsfw);
