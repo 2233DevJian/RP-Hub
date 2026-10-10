@@ -891,33 +891,24 @@ label:is(:active, :focus-within) .settings-toggle::after { transition: transform
 .settings-help-trigger:focus-visible { outline: 2px solid rgb(var(--primary-500) / 0.35); outline-offset: 1px; }
 
 .settings-help-popover {
-    position: absolute;
-    left: 0;
-    top: 1.5rem;
-    z-index: 30;
+    position: fixed;
+    z-index: 1000;
     width: 16rem;
-    max-width: calc(100vw - 4rem);
+    max-width: calc(100vw - 1rem);
     padding: 0.625rem 0.75rem;
     border: 1px solid var(--c-border);
     border-radius: var(--r-md);
-    background: var(--glass-bg-strong);
+    background: var(--c-surface);
     color: var(--c-text-2);
     font-size: 0.6875rem;
     font-weight: 400;
     line-height: 1.6;
-    box-shadow: var(--shadow-2);
-    -webkit-backdrop-filter: blur(16px);
-    backdrop-filter: blur(16px);
+    text-align: left;
+    box-shadow: var(--shadow-3);
     transform-origin: top left;
     animation: pop-in var(--dur-2) var(--ease-out) both;
 }
-.settings-help-popover.is-above { top: auto; bottom: 1.5rem; transform-origin: bottom left; }
 .settings-help-popover-content { display: block; padding-left: 0.5rem; border-left: 2px solid rgb(var(--primary-400)); }
-.memory-mode-help-popover { top: 2.25rem; text-align: left; }
-.memory-mode-help-popover.is-right,
-.token-usage-help-popover.is-right { right: 0; left: auto; }
-.token-usage-help-popover { top: calc(100% + 0.5rem); left: 0.75rem; }
-.token-usage-help-popover.is-right { right: 0.75rem; }
 
 /* ==========================================================================
    Settings

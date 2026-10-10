@@ -2147,7 +2147,7 @@
                                     <span class="relative z-10 pointer-events-none">基础模式</span>
                                     <settings-help topic="summaryMode" :open-topic="settingsHelpTopic"
                                         label="查看基础模式说明" trigger-class="relative z-20" icon-class=""
-                                        popover-class="memory-mode-help-popover" @toggle="settingsHelpTopic = $event">
+                                        @toggle="settingsHelpTopic = $event">
                                         使用总结模型为每轮对话生成第三人称的高密度记忆。超过保留楼层后，AI 原文会由对应的本轮记忆替代。
                                     </settings-help>
                                 </div>
@@ -2158,7 +2158,7 @@
                                     <span class="relative z-10 pointer-events-none">增强模式</span>
                                     <settings-help topic="enhancedMode" :open-topic="settingsHelpTopic"
                                         label="查看增强模式说明" trigger-class="relative z-20" icon-class=""
-                                        popover-class="memory-mode-help-popover is-right" @toggle="settingsHelpTopic = $event">
+                                        @toggle="settingsHelpTopic = $event">
                                         先使用总结模型为每轮对话生成第三人称的高密度记忆，再将用户原输入与对应总结生成向量；按最新输入召回增强记忆。
                                     </settings-help>
                                 </div>
@@ -2205,7 +2205,7 @@
                                     <div class="relative flex items-center">
                                         <label class="text-sm font-semibold text-gray-700">补录并发数</label>
                                         <settings-help topic="classicConcurrency" :open-topic="settingsHelpTopic"
-                                            label="查看补录并发数说明" popover-class="is-above"
+                                            label="查看补录并发数说明"
                                             @toggle="settingsHelpTopic = $event">
                                             控制同时处理多少个总结补录任务。数值越高补录越快；它只影响处理速度，不改变总结内容和记忆顺序。
                                         </settings-help>
@@ -2225,7 +2225,7 @@
                                         <div class="relative flex items-center">
                                             <label class="text-sm font-semibold text-gray-700">保留最近楼层</label>
                                             <settings-help topic="keepFloors" :open-topic="settingsHelpTopic"
-                                                label="查看保留最近楼层说明" popover-class="is-above"
+                                                label="查看保留最近楼层说明"
                                                 @toggle="settingsHelpTopic = $event">
                                                 决定最近多少楼原始对话保留在上下文中，更早的内容会由记忆引擎替代。数值越大，保留的原文越多、上下文占用也越高。
                                             </settings-help>

@@ -725,11 +725,20 @@ const app = createApp({
         let workshopImportPending = false;
         let squareImportPending = false;
         const getSquareFrame = () => document.querySelector(`iframe[src="${squareUrl.value}"]`);
+        // The plaza follows RP-Hub's day/night theme while it is embedded here.
+        const sendSquareTheme = (target = getSquareFrame()?.contentWindow) => target?.postMessage(
+            { type: 'RPHUB_THEME', theme: document.documentElement.dataset.appTheme }, new URL(squareUrl.value).origin
+        );
+        window.addEventListener('rphub-theme-change', () => sendSquareTheme());
         // Each embedded page may only use its own message bridge.
         window.addEventListener('message', async (event) => {
-            if (event.data?.type === 'RPH_FORUM_READY' || event.data?.type === 'RPH_FORUM_IMPORT_CARD') {
+            if (['RPH_FORUM_READY', 'RPH_FORUM_IMPORT_CARD', 'RPH_FORUM_THEME_REQUEST'].includes(event.data?.type)) {
                 const iframe = getSquareFrame();
                 if (!iframe || event.source !== iframe.contentWindow || event.origin !== new URL(squareUrl.value).origin) return;
+                if (event.data.type === 'RPH_FORUM_THEME_REQUEST') {
+                    sendSquareTheme(event.source);
+                    return;
+                }
                 if (event.data.type === 'RPH_FORUM_READY') {
                     event.source.postMessage({ type: 'RPHUB_IMPORT_READY' }, event.origin);
                     return;
