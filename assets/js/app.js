@@ -571,7 +571,6 @@ const app = createApp({
             customApiUrl: '',
             model: DEFAULT_API_CONFIG.qualityModel,
             contextSize: MAX_CONTEXT_SIZE,
-            temperature: 1.0,
             reasoningEffort: '',
             stream: true,
             activeToolAggressiveness: 'adaptive',
@@ -1059,9 +1058,19 @@ const app = createApp({
             }
             return filtered + source.slice(filterEnd);
         };
+        // 历史回复的文风过滤结果按原文缓存，长对话每次组装上下文不必全部重跑；开关变化时清空。
+        const styleFilteredContentCache = new Map();
+        watch(() => settings.styleFilterEnabled, () => styleFilteredContentCache.clear());
+        const getStyleFilteredContent = (content) => {
+            if (styleFilteredContentCache.has(content)) return styleFilteredContentCache.get(content);
+            const filtered = filterBlockedStyleText(content);
+            styleFilteredContentCache.set(content, filtered);
+            if (styleFilteredContentCache.size > 2000) styleFilteredContentCache.delete(styleFilteredContentCache.keys().next().value);
+            return filtered;
+        };
         const getPostprocessedChatMessages = (messages = chatHistory.value, options = {}) => (
             postprocessChatHistory(messages, options).map(message => message.role === 'assistant'
-                ? { ...message, content: filterBlockedStyleText(message.content) }
+                ? { ...message, content: getStyleFilteredContent(message.content) }
                 : message)
         );
         const buildConversationTurnSnapshot = (messages = chatHistory.value, options = {}) => (
@@ -1125,7 +1134,8 @@ const app = createApp({
         const MEMORY_MODE_ENHANCED = 'enhanced';
         const MEMORY_MODE_CLASSIC = 'classic';
         const SUMMARY_KEEP_FLOORS_MIN = 10;
-        const SUMMARY_KEEP_FLOORS_MAX = 40;
+        // 50 楼约等于 25 轮，正好接上二次压缩的起点（25 轮以前）；再高会让被切开的合并总结与保留的原文重复。
+        const SUMMARY_KEEP_FLOORS_MAX = 50;
         const SUMMARY_KEEP_FLOORS_DEFAULT = 20;
         const LIST_PAGE_SIZE = 10;
         const classicMemories = ref([]);
@@ -1864,13 +1874,14 @@ const app = createApp({
 
         // Sync World Info and Regex to Current Character
         watch(worldInfo, (newVal) => {
+            // 切换或加载角色时世界书本就是“全局 + 该角色”拼出来的，无需反向同步，省下整份世界书的几轮序列化。
+            if (_isApplyingCharacterScopedData) return;
             const normalized = JSON.parse(JSON.stringify(newVal)).map(normalizeWorldInfoEntry);
             const globalEntries = normalized.filter(entry => entry.scope === 'global');
             if (JSON.stringify(globalWorldInfo.value) !== JSON.stringify(globalEntries)) {
                 globalWorldInfo.value = globalEntries;
             }
             if (currentCharacterIndex.value !== -1 && characters.value[currentCharacterIndex.value]) {
-                if (_isApplyingCharacterScopedData) return;
                 // Only update if different to avoid infinite loops or unnecessary updates
                 const char = characters.value[currentCharacterIndex.value];
                 const characterEntries = normalized.filter(entry => entry.scope !== 'global');
@@ -2304,6 +2315,27 @@ const app = createApp({
         // --- Computed ---
         const currentCharacter = computed(() => {
             return currentCharacterIndex.value >= 0 ? characters.value[currentCharacterIndex.value] : null;
+        });
+        // PNG 角色卡的头像连同整张卡的数据一起保存，可达十几 MB。界面显示改用短的 blob 地址，
+        // 否则每次重绘背景样式、每新建一个消息头像，浏览器都要重新解析整段 data URL。
+        let avatarDisplayCache = { source: '', url: '' };
+        const currentCharacterAvatar = computed(() => {
+            const source = currentCharacter.value?.avatar || '';
+            const comma = source.indexOf(',');
+            if (source.length < 1e6 || !/^data:[^,]*;base64$/.test(source.slice(0, comma))) return source;
+            if (avatarDisplayCache.source !== source) {
+                if (avatarDisplayCache.url) URL.revokeObjectURL(avatarDisplayCache.url);
+                try {
+                    const binary = atob(source.slice(comma + 1));
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                    const type = source.slice(5, comma).split(';')[0];
+                    avatarDisplayCache = { source, url: URL.createObjectURL(new Blob([bytes], { type })) };
+                } catch (_) {
+                    avatarDisplayCache = { source, url: source };
+                }
+            }
+            return avatarDisplayCache.url;
         });
         const scopeOptions = computed(() => [
             { value: 'character', label: '绑定当前角色卡', disabled: !currentCharacter.value },
@@ -2878,8 +2910,9 @@ const app = createApp({
         });
 
         const conversationBodyLength = computed(() => getConversationBodyLength(chatHistory.value));
+        // 楼层数只看条数，不必给每条回复跑文风过滤。
         const chatRoundStats = computed(() => ({
-            floors: getPostprocessedChatMessages(chatHistory.value, { includeSystem: false }).length
+            floors: postprocessChatHistory(chatHistory.value, { includeSystem: false }).length
         }));
         const currentStoryBranch = computed(() => (
             storyBranches.value.find(branch => branch.id === activeStoryBranchId.value) || null
@@ -3186,6 +3219,14 @@ const app = createApp({
                 .replace(/\n{3,}/g, '\n\n')
                 .trim();
         };
+        // 先确认能匹配再替换：全局替换不论命中与否都会先解析整段替换文本，
+        // 卡里几百 KB 的界面模板会在每条消息的每个片段上被重复解析。
+        const replaceMatched = (text, re, replacement) => {
+            re.lastIndex = 0;
+            const matched = re.test(text);
+            re.lastIndex = 0;
+            return matched ? text.replace(re, replacement) : text;
+        };
         const processRegex = (text, options = {}) => {
             if (!text) return '';
             // options: { isDisplay, isPrompt, role, depth }
@@ -3253,9 +3294,9 @@ const app = createApp({
                         // 完整保留原文的整条包裹只执行一次，避免给面板内每段文字重复套壳。
                         result = wrapped !== null && wrapped.includes(result)
                             ? wrapped
-                            : cardUtils.transformUnprotectedText(result, part => part.replace(re, replacement));
+                            : cardUtils.transformUnprotectedText(result, part => replaceMatched(part, re, replacement));
                     } else {
-                        result = result.replace(re, replacement);
+                        result = replaceMatched(result, re, replacement);
                     }
 
                 } catch (e) {
@@ -3661,6 +3702,7 @@ const app = createApp({
             let finalContent = content;
             if (cardInteraction) {
                 chatHistory.value.push({
+                    id: generateUUID(),
                     role: 'user',
                     content: cardInteraction,
                     isSelf: true,
@@ -3672,6 +3714,7 @@ const app = createApp({
             if (finalContent || imageAttachments.length) {
                 // Add user message locally with NAME
                 chatHistory.value.push({
+                    id: generateUUID(),
                     role: 'user',
                     name: user.name,
                     content: finalContent,
@@ -4358,6 +4401,8 @@ const app = createApp({
                 }, 100);
             };
             startTimer(); // Start timer immediately upon request initiation
+            // 组装上下文是一段较长的同步计算，先让刚发出的气泡和等待动画画到屏幕上。
+            await yieldToUi();
 
 
             // --- Advanced World Info Processing ---
@@ -4792,15 +4837,13 @@ const app = createApp({
 
                 // 必须在正则、角色合并和记忆处理之后追加，保留 tool_call_id 及服务端签名。
                 messages.push(...activeToolMessages);
-                const contextViewerState = buildContextViewerState({
-                    messages,
-                    budgetedEntries,
-                    triggeredEntries,
-                    postprocessedChatHistory,
-                    worldInfoSettings
-                });
-                lastContextMessages.value = contextViewerState.contextMessages;
-                lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
+                // 上下文查看器的数据只给弹窗用，长对话里整理一次要上百毫秒，等请求发出后再做。
+                const contextViewerInput = { messages, budgetedEntries, triggeredEntries, postprocessedChatHistory, worldInfoSettings };
+                setTimeout(() => {
+                    const contextViewerState = buildContextViewerState(contextViewerInput);
+                    lastContextMessages.value = contextViewerState.contextMessages;
+                    lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
+                }, 0);
 
                 const apiMessages = messages.map(({ role, name, content, tool_calls, tool_call_id, reasoning_content, reasoning, reasoning_details, extra_content }) => ({
                     role,
@@ -4820,7 +4863,7 @@ const app = createApp({
                     replyInTool: isTruncationEnabled.value,
                     tools: buildActiveToolDefinitions(requestTools),
                     requireTool: activeToolDepth === 0 && requestTools.length > 0 && getActiveToolAggressiveness() === 'force',
-                    temperature: settings.temperature,
+                    temperature: 1,
                     reasoningEffort: settings.reasoningEffort,
                     stream: settings.stream,
                     signal: requestSignal,
@@ -4914,7 +4957,7 @@ const app = createApp({
                     appendAssistantResponseError(targetMessage, errorMessage);
                     if (continuingAssistantMessage) activeToolContinuationHasResponse.value = true;
                 } else {
-                    chatHistory.value.push({ role: 'system', name: currentCharacter.value.name, content: errorMessage, skipReveal: true });
+                    chatHistory.value.push({ role: 'system', name: currentCharacter.value.name, content: errorMessage, skipReveal: true, shouldAnimate: true });
                 }
             } finally {
                 if (assistantMessage?.content) {
@@ -7812,9 +7855,6 @@ const app = createApp({
                 showUserSetupModal.value = true;
             }
 
-            // 每次启动时强制重置温度为 1.0
-            settings.temperature = 1.0;
-
             // --- Enforce Defaults ---
 
             // 1. Enforce Default Preset (破限)
@@ -8279,7 +8319,7 @@ const app = createApp({
             updateModalRef, latestUpdateConfig,
             showConfirmModal, confirmMessage, modelMode, isGeminiModel, isTruncationEnabled, isPresetEnabled, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, // Export for template
             isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingCardInteraction, clearPendingCardInteraction, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
-            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, getSortableItemKey, regexScripts, worldInfo,
+            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterAvatar, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, getSortableItemKey, regexScripts, worldInfo,
             activeTools, activeToolAggressivenessOptions: ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS, editingActiveTool, normalizeActiveTools, isWebActiveTool, getActiveToolDisplayDescription, getActiveToolResultCountMin, getActiveToolResultCountMax,
             getToolCallModeText, hasThinkingOrTools, isMessageThinkingOrRunning, isThinkingSummaryOpen, toggleThinkingSummary, markThinkingSummaryDetailOpened, getTimelineSteps,
             isStyleFilterDetailsOpen, toggleStyleFilterDetails, getStyleFilterHitSegments,

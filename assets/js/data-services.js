@@ -585,11 +585,16 @@
         return new RegExp(source, flags);
     };
 
+    // 同一段扫描文本要和几千条世界书的关键词逐个比对，小写结果只算一次。
+    let lowerCaseCache = { text: '', lower: '' };
     const worldInfoKeyMatchesText = (entry, key, text) => {
         const rawKey = String(key || '').trim();
         const rawText = String(text || '');
         if (!rawKey || !rawText) return false;
-        if (!entry?.useRegex) return rawText.toLowerCase().includes(rawKey.toLowerCase());
+        if (!entry?.useRegex) {
+            if (lowerCaseCache.text !== rawText) lowerCaseCache = { text: rawText, lower: rawText.toLowerCase() };
+            return lowerCaseCache.lower.includes(rawKey.toLowerCase());
+        }
         try {
             return createWorldInfoRegex(rawKey).test(rawText);
         } catch (_) {
@@ -604,6 +609,7 @@
         const random = typeof options.random === 'function' ? options.random : Math.random;
         const probabilityResults = new Map();
         const triggerMap = new Map();
+        const scanTexts = new Map();
 
         const passesProbability = (entry) => {
             const probability = Math.min(100, toNonNegativeNumber(entry?.probability, 100));
@@ -626,7 +632,8 @@
             const keys = Array.isArray(entry.keys) ? entry.keys : [];
             if (scanDepth === 0 || keys.length === 0 || !passesProbability(entry)) return;
 
-            const scanText = chatMessages.slice(-scanDepth).map(message => message?.content || '').join('\n');
+            if (!scanTexts.has(scanDepth)) scanTexts.set(scanDepth, chatMessages.slice(-scanDepth).map(message => message?.content || '').join('\n'));
+            const scanText = scanTexts.get(scanDepth);
             const matchedKeys = keys
                 .map(key => String(key || '').trim())
                 .filter(key => key && worldInfoKeyMatchesText(entry, key, scanText));

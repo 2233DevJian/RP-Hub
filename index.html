@@ -110,7 +110,7 @@
                 <!-- Character Background Layer -->
                 <div v-if="settings.useCharacterBackground && currentCharacter && currentCharacter?.avatar"
                     class="absolute -inset-4 bg-cover bg-center bg-no-repeat pointer-events-none transition-opacity duration-500 z-0 blur-[2px] char-bg-blur"
-                    :style="{ backgroundImage: `url(${JSON.stringify(currentCharacter.avatar)})`, opacity: 0.9 }">
+                    :style="{ backgroundImage: `url(${JSON.stringify(currentCharacterAvatar)})`, opacity: 0.9 }">
                 </div>
 
                 <!-- Blur Overlay for Description Panel -->
@@ -127,7 +127,7 @@
                             <button type="button" @click="editCharacter(currentCharacterIndex)"
                                 class="group flex-shrink-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-300"
                                 title="编辑角色">
-                                <img :src="currentCharacter?.avatar"
+                                <img :src="currentCharacterAvatar"
                                     class="w-14 h-14 rounded-xl object-cover border border-white shadow-sm transition-transform duration-200 group-hover:scale-[1.02]">
                             </button>
 
@@ -218,7 +218,7 @@
                             </button>
                             <div v-if="currentCharacter" class="flex items-center min-w-0 cursor-pointer"
                                 @click="showDescriptionPanel = !showDescriptionPanel">
-                                <img :src="currentCharacter?.avatar"
+                                <img :src="currentCharacterAvatar"
                                     class="w-9 h-9 rounded-full object-cover border border-white/20 shadow-sm flex-shrink-0">
                                 <span class="ml-2 font-medium text-white truncate drop-shadow-md">{{
                                     currentCharacter.name }}</span>
@@ -272,7 +272,7 @@
                         <button @click="currentView = 'characters'" class="modal-primary-button">前往角色管理</button>
                     </div>
                     <div v-else-if="chatHistory.length === 0" class="chat-empty">
-                        <img :src="currentCharacter?.avatar" class="chat-empty__avatar" alt="">
+                        <img :src="currentCharacterAvatar" class="chat-empty__avatar" alt="">
                         <p class="chat-empty__title">开始与 {{ currentCharacter.name }} 对话吧</p>
                     </div>
 
@@ -288,7 +288,7 @@
                             :class="['flex centered-message-shell max-w-[99%]', settings.immersiveMode ? 'immersive-message-shell' : 'standard-message-shell', messageUsesWideLayout(msg) || msg.isEditing_Message ? 'w-full' : '', msg.isSelf ? 'flex-row-reverse' : 'flex-row']">
                             <!-- Avatar -->
                             <div v-show="!settings.immersiveMode"
-                                :class="['flex-shrink-0 select-none', msg.shouldAnimate ? 'animate-message-fade-in' : '']">
+                                :class="['flex-shrink-0 select-none', msg.shouldAnimate && msg.role !== 'system' ? 'animate-message-fade-in' : '']">
                                 <div v-if="msg.role === 'user'"
                                     :class="['msg-avatar w-9 h-9 rounded-full overflow-hidden', msg.isSelf ? 'ml-2' : 'mr-2']">
                                     <img v-if="msg?.avatar || (msg?.isSelf && user?.avatar)"
@@ -301,14 +301,14 @@
                                         {{ (msg.name || user.name || 'U').charAt(0) }}
                                     </div>
                                 </div>
-                                <img v-else :src="currentCharacter?.avatar" class="msg-avatar w-9 h-9 rounded-full object-cover mr-2">
+                                <img v-else :src="currentCharacterAvatar" class="msg-avatar w-9 h-9 rounded-full object-cover mr-2">
                             </div>
 
                             <div
                                 :class="['flex flex-col min-w-0', settings.immersiveMode ? 'immersive-message-column' : '', messageUsesWideLayout(msg) || msg.isEditing_Message ? 'flex-1 w-full' : '', msg.isSelf ? 'items-end' : 'items-start']">
                                 <!-- Name (Outside Bubble) -->
                                 <div v-show="!settings.immersiveMode"
-                                    :class="['msg-name-tag truncate max-w-[210px] md:max-w-[250px]', msg.isSelf ? 'ml-auto mr-1' : 'mr-auto ml-1', msg.shouldAnimate ? 'animate-message-fade-in' : '']">
+                                    :class="['msg-name-tag truncate max-w-[210px] md:max-w-[250px]', msg.isSelf ? 'ml-auto mr-1' : 'mr-auto ml-1', msg.shouldAnimate && msg.role !== 'system' ? 'animate-message-fade-in' : '']">
                                     {{ msg.name || (msg.role === 'user' ? user.name : (currentCharacter?.name || 'Unknown')) }}
                                 </div>
                                 <!-- Message Bubble -->
@@ -316,7 +316,7 @@
                                     :class="{'w-full': messageUsesWideLayout(msg) || msg.isEditing_Message, 'message-edit-group': msg.isEditing_Message}">
                                     <div @click="handleGeneratedImageReroll($event, index)"
                                         :class="['msg-bubble-glass p-0 text-sm md:text-base leading-relaxed overflow-hidden',
-                                        msg.shouldAnimate && !(msg.role === 'assistant' && msg.reasoning) ? 'animate-message-in' : '',
+                                        msg.shouldAnimate && !(msg.role === 'assistant' && msg.reasoning) ? (msg.role === 'system' ? 'animate-bubble-swap' : 'animate-message-in') : '',
                                         messageUsesWideLayout(msg) || msg.isEditing_Message ? 'w-full' : '',
                                         msg.isSelf ? 'msg-bubble--self' : msg.role === 'system' ? 'msg-bubble--system' : '']">
 
@@ -623,7 +623,7 @@
                             :class="['flex flex-row centered-message-shell max-w-[99%]', settings.immersiveMode ? 'immersive-message-shell' : 'standard-message-shell']">
                             <div v-show="!settings.immersiveMode" class="flex-shrink-0 animate-message-in"
                                 style="animation-delay: 100ms;">
-                                <img :src="currentCharacter?.avatar" class="msg-avatar w-9 h-9 rounded-full object-cover mr-2">
+                                <img :src="currentCharacterAvatar" class="msg-avatar w-9 h-9 rounded-full object-cover mr-2">
                             </div>
                             <div :class="['flex flex-col min-w-0 items-start', settings.immersiveMode ? 'immersive-message-column' : '']">
                                 <div v-show="!settings.immersiveMode"
@@ -757,14 +757,6 @@
                                             <input v-model.number="reasoningEffortSlider" type="range" min="0" max="5" step="1"
                                                 class="compact-range block w-full appearance-none cursor-pointer accent-primary-500"
                                                 aria-label="推理强度">
-                                        </div>
-                                        <div class="min-w-0 border-t border-gray-200/70 pt-2">
-                                            <div class="mb-1 flex flex-wrap items-center justify-between gap-x-1 text-xs">
-                                                <span class="font-bold text-gray-500">温度</span>
-                                                <span class="font-mono font-semibold text-gray-500 tabular-nums">{{ Number(settings.temperature).toFixed(2) }}</span>
-                                            </div>
-                                            <input v-model.number="settings.temperature" type="range" min="0" max="1" step="0.01"
-                                                class="compact-range block w-full appearance-none cursor-pointer accent-primary-500" aria-label="温度">
                                         </div>
                                     </div>
                                     <div class="flex flex-col gap-1 rounded-xl bg-gray-50">

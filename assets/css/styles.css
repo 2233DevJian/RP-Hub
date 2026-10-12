@@ -1553,6 +1553,10 @@ button.sortable-item-main:focus-visible { outline: 2px solid rgb(var(--primary-4
 .msg-bubble-glass,
 .msg-name-tag { transition: -webkit-backdrop-filter var(--dur-4) var(--ease-out) 0.7s, backdrop-filter var(--dur-4) var(--ease-out) 0.7s; }
 .msg-bubble-glass.animate-message-in { animation: message-in 0.5s var(--ease-out) backwards, glass-in var(--dur-4) var(--ease-out) 0.5s backwards; }
+/* An error takes the waiting bubble's place beside the same avatar and name, so it grows out of the
+   avatar corner instead of popping in as a new message. */
+@keyframes bubble-swap { from { opacity: 0; transform: scale(0.92); } }
+.msg-bubble-glass.animate-bubble-swap { transform-origin: top left; animation: bubble-swap 0.5s var(--ease-out) backwards, glass-in var(--dur-4) var(--ease-out) 0.5s backwards; }
 .scroll-reveal-container:not(.reveal-active):not([data-revealed="true"]) :is(.msg-bubble-glass, .msg-name-tag) {
     -webkit-backdrop-filter: blur(0) saturate(100%);
     backdrop-filter: blur(0) saturate(100%);
@@ -1871,7 +1875,7 @@ button.sortable-item-main:focus-visible { outline: 2px solid rgb(var(--primary-4
 .update-content .markdown-body > * { margin-bottom: 1em !important; }
 .update-content .markdown-body li { margin-top: 0.5em !important; margin-bottom: 0.5em !important; }
 
-.response-error-text { color: rgb(var(--red-text-600, var(--red-600))); font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.response-error-text { color: rgb(var(--red-text-600, var(--red-600))); font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; animation: rise-in 0.5s var(--ease-out) backwards; }
 
 /* ==========================================================================
    Thinking & tool timeline

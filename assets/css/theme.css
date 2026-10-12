@@ -320,7 +320,11 @@
    The icon names the action (RPHubUtils.getToastIcon); its tint says how it went. */
 .toast-stack { position: relative; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
 .toast-item {
+    /* One line tall (icon plus padding and border), so a leaving toast knows how much space to fold away. */
+    --toast-height: calc(2.625rem + 2px);
     display: flex;
+    box-sizing: border-box;
+    height: var(--toast-height);
     align-items: center;
     gap: 0.625rem;
     min-width: min(17.5rem, calc(100vw - 2rem));
@@ -344,12 +348,13 @@
 .toast-item--error .toast-icon { background: rgb(var(--red-500) / 0.14); color: rgb(var(--red-text-600, var(--red-600))); }
 .toast-item--info .toast-icon { background: rgb(var(--primary-500) / 0.14); color: rgb(var(--primary-text-600, var(--primary-600))); }
 .toast-item--warning .toast-icon { background: rgb(var(--amber-500) / 0.16); color: rgb(var(--amber-text-700, var(--amber-700))); }
-.toast-enter-active { transition: opacity var(--dur-2) var(--ease-out), transform var(--dur-2) var(--ease-out); }
-.toast-leave-active { transition: opacity var(--dur-1) var(--ease-in); }
-.toast-stack > .toast-leave-active { position: absolute; }
-.toast-move { transition: transform var(--dur-2) var(--ease-out); }
-.toast-enter-from { opacity: 0; transform: translate3d(0, -8px, 0); }
-.toast-leave-to { opacity: 0; }
+/* A leaving toast fades and shrinks in place while its space folds shut, so the ones below glide up
+   over it instead of the stack jumping. */
+.toast-enter-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out); }
+.toast-leave-active { transition: opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-in-out), margin-bottom var(--dur-3) var(--ease-in-out); }
+.toast-move { transition: transform var(--dur-3) var(--ease-out); }
+.toast-enter-from { opacity: 0; transform: translate3d(0, -10px, 0) scale(0.96); }
+.toast-leave-to { opacity: 0; transform: translate3d(0, -4px, 0) scale(0.94); margin-bottom: calc(-1 * (var(--toast-height) + 0.5rem)); }
 
 /* Theme toggle in the navigation footer. */
 .appearance-switch {
