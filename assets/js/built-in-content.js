@@ -70,10 +70,10 @@ year 2025, textless version, {{petite,loli}}, Petite figure, no text, The image 
         const labels = [
             memoryEnabled ? '[记忆整理]' : '',
             '[情景意图分析]',
-            uiTemplateEnabled ? '[变量更新分析]' : '',
             '[设定分析]',
             '[信息边界]',
             '[剧情规划]',
+            uiTemplateEnabled ? '[变量更新分析]' : '',
             '[最终检查]'
         ].filter(Boolean).join('/');
         const languageInstruction = String(tag).toLowerCase() === 'thinking' ? '使用中文' : '';
@@ -83,10 +83,10 @@ year 2025, textless version, {{petite,loli}}, Petite figure, no text, The image 
     const buildOpeningAnalysisContent = ({ memoryEnabled = false, uiTemplateEnabled = false, characterName = '' } = {}) => [
         memoryEnabled ? '[记忆整理]\n上条消息本身没有提供可核对的剧情记忆，本轮没有新增记忆事实。' : '',
         `[情景意图分析]\n这是${String(characterName || '角色')}的开场。先从开场白确认时间、地点、在场人物、关系和最后动作，再判断当前事件和各角色的关注点；不要默认把{{user}}当成主角或叙事中心。`,
-        uiTemplateEnabled ? '[变量更新分析]\n只根据开场白和当前变量确认已经发生的状态变化；没有明确变化就不输出变量更新。' : '',
         '[设定分析]\n结合角色卡、世界书和开场白确定人物动机、边界、关系阶段及场景限制，不用通用设定补全缺失信息。',
         '[信息边界]\n只使用开场白中已经观察或说明的内容；未写明的用户言行、决定、心理和隐藏信息保持未知。',
         '[剧情规划]\n正文从开场白的最后一个有效动作自然开始，围绕当前最有因果作用的角色和事件推进；{{user}}只是众多角色中的一员，不因用户身份获得镜头、信息或行动优先权。需要{{user}}回应时再停在可回应的位置。',
+        uiTemplateEnabled ? '[变量更新分析]\n只根据开场白和当前变量确认已经发生的状态变化；没有明确变化就不输出变量更新。' : '',
         '[最终检查]\n检查人物、时间线和因果连续，完成分析并闭合标签后直接输出正文，不泄露分析过程。'
     ].filter(Boolean).join('\n\n');
 
@@ -674,12 +674,13 @@ You are carrying out an ongoing fictional writing task. Act as a storyteller and
         const analysisTag = useThinkingOpening ? 'thinking' : 'cot';
         const memoryFragmentSection = memoryEnabled ? `
 [记忆整理]
-整理当前提供的总结记忆、召回记忆或已经确认的具体事实，直接落到时间、人物、关系、行动结果、物品状态和未解事件上，理清时间线与剧情发展脉络。不要复述处理步骤，旧记忆不得当作当前现场；主动找出本轮能承接的记忆并记下编号（如 M12），写到对应剧情时在句末标注，不要漏标。
+- 整理当前提供的总结记忆、召回记忆或已经确认的具体事实，直接落到时间、人物、关系、行动结果、物品状态和未解事件上，理清时间线与剧情发展脉络；旧记忆不得当作当前现场，不要复述处理步骤。
+- 主动找出本轮能承接的记忆并记下编号（如 M12），写到对应剧情时在句末标注，不要漏标。
 ` : '';
         const uiTemplateAnalysisSection = uiTemplateAnalysisEnabled ? `
 [变量更新分析]
-逐项检查系统提供的当前变量，只记录本轮确实需要变化的字段、新值和依据。最终变量块按系统格式放在正文结束后。
-        ` : '';
+依据本轮规划的剧情结果，逐项检查系统提供的当前变量，只记录确实需要变化的字段、新值和依据。最终变量块按系统格式放在正文结束后。
+` : '';
 
         if (prefillPhase) {
             const prefillMemorySection = memoryEnabled
@@ -693,7 +694,6 @@ You are carrying out an ongoing fictional writing task. Act as a storyteller and
                 prefillPhase === 1
                     ? '[情景意图分析]\n用户这次没有给剧情，而是要求我先分析续写难点。也就是说，本轮要回答的是“怎样避免写偏”，不是开始编造角色和场景。'
                     : '[情景意图分析]\n用户已经把任务从“分析难点”切换成“直接续写”。前面的准备到此结束，下一步应读取后续设定和历史，从最后一个真实事件接着写。',
-                prefillVariableSection,
                 prefillPhase === 1
                     ? '[设定分析]\n当前还没有角色卡、世界书、历史或现场信息，所以没有人物动机可以判断；只能确认后续必须等这些资料出现，不能拿通用人设代替。'
                     : '[设定分析]\n真正的角色动机和现场状态要从后续角色卡、世界书、历史和用户输入中确定；现在只能先把“直接续写”作为输出方向，不能提前替角色做决定。',
@@ -703,6 +703,7 @@ You are carrying out an ongoing fictional writing task. Act as a storyteller and
                 prefillPhase === 1
                     ? '[剧情规划]\n本轮只需确认几个会直接影响续写的难点：从长上下文找出关键事实、保持角色连续、分清谁知道什么。'
                     : '[剧情规划]\n收到后续上下文后，先找出最近一个有效事件，再用对白或行动让局面产生变化。',
+                prefillVariableSection,
                 prefillPhase === 1
                     ? '[最终检查]\n这次回复应当是对困难的实际判断，不是把规则再抄一遍；不生成虚构正文，保留后续续写需要的上下文。'
                     : '[最终检查]\n确认后续正文有明确承接点，没有替用户行动，也没有把准备说明混进剧情；按<writing_style>完成检查后直接续写。'
@@ -724,20 +725,23 @@ You are carrying out an ongoing fictional writing task. Act as a storyteller and
 ${openingInstruction}
 ${memoryFragmentSection}
 [情景意图分析]
-整理时间线、历史片段，按正确顺序分析过往事件、关系延续、未解情绪，以及 {{user}} 最新输入里的潜台词、情绪和真实需求；同时判断本轮最有因果作用的角色或事件，不把 {{user}} 默认当成主角或叙事中心。完整承接 {{user}} 已明确给出的言行，不得擅自解释真实意图。
-${uiTemplateAnalysisSection}
+- 现场：确认此刻的时间、地点、在场人物和最后发生的事件，按正确顺序理清相关历史，以及仍在延续的关系和情绪。
+- 输入：完整承接 {{user}} 已明确给出的言行，分析其中的情绪、潜台词和真实需求，不擅自解释或补全其意图。
 
 [设定分析]
-结合角色设定、世界观和当前处境，分析角色此刻最合理的动机、边界、反应方式，以及环境会给行动带来的具体影响。
+结合角色设定、世界观和当前处境，判断相关角色此刻最合理的动机、边界和反应方式，以及环境会给行动带来的具体影响。
 
 [信息边界]
-分别确认各角色此刻掌握的信息及其来源，区分亲历、被告知、合理推断与未知。未在场事件、他人内心、旁白信息、隐藏设定及仅向其他角色展示的内容，未经观察或传递不得知晓；推断只能作为人物判断，不得写成已确认事实，角色之间不得自动共享认知。
+- 分别确认各角色此刻掌握的信息及其来源，区分亲历、被告知、合理推断与未知。
+- 未在场事件、他人内心、旁白信息、隐藏设定及仅向其他角色展示的内容，未经观察或传递不得知晓；推断只能作为人物判断，不得写成已确认事实，角色之间不得自动共享认知。
 
 [剧情规划]
-设置具体有意义的剧情焦点，思考围绕什么角色、群体或事件自然展开；通过何种内容的对白、选择、行动结果或关系反应推进，以及如何塑造活人感与代入感。${storyPanelsEnabled ? '\n判断本轮哪些信息值得通过剧情UI面板展示，明确面板内容、插入位置及设计样式；有展示价值时积极安排，不复述正文或照搬上轮面板。' : ''}
-
+- 焦点：选出本轮最有因果作用的角色、群体或事件，不把 {{user}} 默认当成主角或叙事中心。
+- 推进：确定通过哪些对白、选择、行动结果或关系反应让局面发生变化，以及是否需要停在等待 {{user}} 回应的位置。
+- 规则：当前剧情已经进入或正在明确推进NSFW内容时应用<nsfw_rules>，否则忽略。${storyPanelsEnabled ? '\n- 面板：判断本轮哪些信息值得通过剧情UI面板展示，明确面板内容、插入位置及设计样式；有展示价值时积极安排，不复述正文或照搬上轮面板。' : ''}
+${uiTemplateAnalysisSection}
 [最终检查]
-确认人物没有失真或越过认知边界，剧情因果成立。先判断是否应用<nsfw_rules>：当前剧情已经进入或正在明确推进NSFW内容时应用；否则忽略。随后按<writing_style>做最终检查。
+确认人物没有失真或越过认知边界、剧情因果成立、没有替 {{user}} 补写言行，再按<writing_style>做最终检查。
 ${closingInstruction}
 </thinking_protocol>`.replace(/\n{3,}/g, '\n\n');
     };

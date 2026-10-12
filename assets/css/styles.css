@@ -2549,7 +2549,7 @@ button.sortable-item-main:focus-visible { outline: 2px solid rgb(var(--primary-4
     .immersive-message-shell.flex-row-reverse .immersive-message-column { align-items: flex-end !important; }
     .immersive-message-column > .group:not(.message-edit-group) { width: fit-content; max-width: 100%; }
     .immersive-message-column > .group.w-full { width: 100%; }
-    .immersive-message-column .active-tool-waiting { width: fit-content; min-width: 9.5rem; max-width: 100%; }
+    .immersive-message-column .active-tool-waiting { width: fit-content; min-width: 9.5rem; max-width: 100%; margin-inline: auto; }
 }
 
 @media (max-width: 768px) {
