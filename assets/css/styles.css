@@ -1613,7 +1613,8 @@ button.sortable-item-main:focus-visible { outline: 2px solid rgb(var(--primary-4
     padding: 0.0625rem 0.125rem;
     border: 1px solid var(--glass-edge);
     border-radius: 999px;
-    background: var(--glass-bg);
+    /* Same fill as the chat bubbles it sits under. */
+    background: rgb(var(--surface) / 0.85);
     box-shadow: var(--shadow-1);
     -webkit-backdrop-filter: blur(12px) saturate(140%);
     backdrop-filter: blur(12px) saturate(140%);
@@ -2594,7 +2595,7 @@ button.sortable-item-main:focus-visible { outline: 2px solid rgb(var(--primary-4
     }
     [class*="blur-"]:not(.char-bg-blur) { filter: none !important; }
 
-    :is(.msg-name-tag, .typing-timer-badge, .message-action-bar) { background: var(--glass-bg-strong); }
+    :is(.msg-name-tag, .typing-timer-badge) { background: var(--glass-bg-strong); }
     :is(.desc-panel, .input-island) { background: var(--c-surface) !important; }
     :is(.app-navigation-panel, .app-nav-trigger--embedded) { background: linear-gradient(150deg, var(--glass-sheen), transparent 55%), var(--c-surface); }
     .desc-panel-overlay { background-color: rgba(0, 0, 0, 0.14) !important; }

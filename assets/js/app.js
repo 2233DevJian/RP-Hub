@@ -571,6 +571,7 @@ const app = createApp({
             customApiUrl: '',
             model: DEFAULT_API_CONFIG.qualityModel,
             contextSize: MAX_CONTEXT_SIZE,
+            temperature: 1.0,
             reasoningEffort: '',
             stream: true,
             activeToolAggressiveness: 'adaptive',
@@ -4863,7 +4864,7 @@ const app = createApp({
                     replyInTool: isTruncationEnabled.value,
                     tools: buildActiveToolDefinitions(requestTools),
                     requireTool: activeToolDepth === 0 && requestTools.length > 0 && getActiveToolAggressiveness() === 'force',
-                    temperature: 1,
+                    temperature: settings.temperature,
                     reasoningEffort: settings.reasoningEffort,
                     stream: settings.stream,
                     signal: requestSignal,
@@ -7854,6 +7855,9 @@ const app = createApp({
                 tempUserSetup.person = user.person || 'second';
                 showUserSetupModal.value = true;
             }
+
+            // 每次启动时强制重置温度为 1.0
+            settings.temperature = 1.0;
 
             // --- Enforce Defaults ---
 
