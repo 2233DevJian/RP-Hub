@@ -931,9 +931,9 @@ const app = createApp({
         const isConversationBusy = computed(() => isGenerating.value || isRemoteGenerating.value || hasActiveToolInlineWork.value);
 
         const presets = ref([]);
-        // 抗截断只临时停用 COT，不改写用户保存的开关状态。
-        const isPresetEnabled = preset => preset.enabled !== false
-            && (preset.name !== 'COT' || !isTruncationEnabled.value);
+        // Gemini 模型一律不发送 COT 与 NSFW增强；只临时停用，不改写用户保存的开关状态。
+        const isPresetBlockedForModel = preset => isGeminiModel.value && ['COT', BUILTIN_PRESETS.nsfw.name].includes(preset?.name);
+        const isPresetEnabled = preset => preset.enabled !== false && !isPresetBlockedForModel(preset);
         const isStoryPanelsEnabled = computed(() => presets.value.some(preset => preset.name === BUILTIN_PRESETS.storyPanels.name
             && preset.enabled !== false && String(preset.content || '').trim()));
         const normalizePresetRole = (role) => (
@@ -7982,7 +7982,6 @@ const app = createApp({
                 () => activeUiTemplates.value.length,
                 isStoryPanelsEnabled,
                 () => settings.model,
-                isTruncationEnabled,
                 () => presets.value.find(preset => preset.name === cotPresetName)?.enabled
             ], syncDynamicPresetContent);
             removeLegacyUserRegex();
@@ -8321,7 +8320,7 @@ const app = createApp({
             storageStats, refreshStorageStats, cleanupUnusedStorage, formatStorageSize,
             showCharacterExportModal, openCharacterExportModal, confirmCharacterExport, // Character Export Modal
             updateModalRef, latestUpdateConfig,
-            showConfirmModal, confirmMessage, modelMode, isGeminiModel, isTruncationEnabled, isPresetEnabled, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, // Export for template
+            showConfirmModal, confirmMessage, modelMode, isGeminiModel, isPresetEnabled, isPresetBlockedForModel, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, // Export for template
             isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingCardInteraction, clearPendingCardInteraction, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
             user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterAvatar, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, getSortableItemKey, regexScripts, worldInfo,
             activeTools, activeToolAggressivenessOptions: ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS, editingActiveTool, normalizeActiveTools, isWebActiveTool, getActiveToolDisplayDescription, getActiveToolResultCountMin, getActiveToolResultCountMax,
