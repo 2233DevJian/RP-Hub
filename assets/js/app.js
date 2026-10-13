@@ -8284,8 +8284,8 @@ const app = createApp({
             open: showMemoryCitation,
             frameStyle: () => {
                 const tone = getComputedStyle(document.documentElement).getPropertyValue('--primary-500').trim() || '99 102 241';
-                return `.memory-cite-text{text-decoration:underline dotted rgb(${tone});text-decoration-thickness:1.5px;text-underline-offset:.3em;cursor:pointer}`
-                    + `.memory-cite{display:inline-flex;align-items:center;justify-content:center;min-width:1.4em;height:1.4em;margin:0 .15em;padding:0 .35em;border:0;border-radius:999px;background:rgb(${tone} / .14);color:rgb(${tone});font:700 .68em/1 system-ui,sans-serif;vertical-align:.35em;cursor:pointer}`;
+                return `.memory-cite-text{text-decoration:underline dotted rgb(${tone} / .75);text-decoration-thickness:1.5px;text-underline-offset:.3em;cursor:pointer}`
+                    + `.memory-cite{display:inline-flex;align-items:center;justify-content:center;min-width:1.4em;height:1.4em;margin:0 .15em;padding:0 .35em;border:0;border-radius:999px;background:rgb(${tone} / .14);color:rgb(${tone});font:700 .8em/1 system-ui,sans-serif;vertical-align:.4em;cursor:pointer}`;
             }
         };
 

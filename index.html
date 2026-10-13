@@ -79,7 +79,7 @@
     <div id="app" v-cloak class="h-full flex flex-col md:flex-row relative"
         :class="{ 'app-native-fullscreen': isChatFullscreen, 'mobile-keyboard-active': isMobileKeyboardOpen }">
         <component is="style" v-if="settings.fontSize">
-            .markdown-body :not(h1):not(h2):not(h3):not(h4):not(h5):not(h6):not(small):not(sub):not(sup):not(code) {
+            .markdown-body :not(h1):not(h2):not(h3):not(h4):not(h5):not(h6):not(small):not(sub):not(sup):not(code):not(.memory-cite) {
             font-size: inherit !important;
             }
         </component>

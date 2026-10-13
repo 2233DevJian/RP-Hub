@@ -1089,7 +1089,7 @@ label:is(:active, :focus-within) .settings-toggle::after { transition: transform
 /* Memory citations in replies: the sentence gets a dotted underline and ends in a small number chip;
    either opens the summary the model leaned on. */
 .memory-cite-text {
-    text-decoration: underline dotted rgb(var(--primary-400));
+    text-decoration: underline dotted rgb(var(--primary-400) / 0.75);
     text-decoration-thickness: 1.5px;
     text-underline-offset: 0.3em;
     cursor: pointer;
@@ -1106,10 +1106,10 @@ label:is(:active, :focus-within) .settings-toggle::after { transition: transform
     background: rgb(var(--primary-500) / 0.12);
     color: var(--c-accent-text);
     font-family: var(--font-sans);
-    font-size: 0.68em;
+    font-size: 0.8em;
     font-weight: 700;
     line-height: 1;
-    vertical-align: 0.35em;
+    vertical-align: 0.4em;
     cursor: pointer;
     transition: background-color var(--dur-2) ease;
 }
