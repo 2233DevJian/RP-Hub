@@ -755,21 +755,14 @@ ${closingInstruction}
 
 // --- Update announcement (keep this section at the bottom) ---
 window.RPHubLatestUpdate = Object.freeze({
-    id: 10219,
+    id: 10220,
     title: '网站公告',
     content: `
-### RP-Hub 2.0.1
+### RP-Hub 2.0.2
 
-- 极大程度优化了长上下文/复杂角色卡下的性能表现
-- 角色卡工坊支持显示思考过程
-- 解决了长上下文/复杂角色卡下的卡顿问题
-- 提升了角色卡工坊修改角色卡时的速度与准确率
-- 优化了角色卡工坊输入区域的UI表现
-- 优化了记忆系统开启时的回调准确率
-- 优化了toast通知的动画效果
-- 修复了IOS系统部分情况下的滑动问题
-- 修复了角色卡工坊用词过度沙盒化的问题
+- 适配Gemini-4-Argon的COT输出
+- 重新支持Gemini模型部分预设的开启
 
-#### 更新时间：10/13/04:43
+#### 更新时间：10/14/03:02
     `
 });
