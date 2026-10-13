@@ -4358,7 +4358,6 @@ const app = createApp({
                 ? `(${BUILTIN_PROMPTS.replyToolInstruction.replace(/。$/, '')})` : '';
             target.content = `${String(target.content || '').trimEnd()}${replyToolReminder}\n\n${prompt}`;
         };
-        const usedGeminiPromptNonces = new Set();
         const generateResponse = async (startTime = null, options = {}) => {
             const reuseGeneratingState = options.reuseGeneratingState === true;
             if (isGenerating.value && !reuseGeneratingState) return;
@@ -4422,15 +4421,6 @@ const app = createApp({
             const enabledPresets = presets.value
                 .map(normalizePreset)
                 .filter(p => isPresetEnabled(p) && p.content.trim());
-            const noncePreset = enabledPresets.find(p => p.role === 'system');
-            if (/gemini/i.test(requestModel) && noncePreset) {
-                let nonce;
-                do {
-                    nonce = Math.random().toString(36).slice(2, 8 + Math.floor(Math.random() * 3));
-                } while (!/^(?=.*[a-z])(?=.*\d)[a-z\d]{6,8}$/.test(nonce) || usedGeminiPromptNonces.has(nonce));
-                usedGeminiPromptNonces.add(nonce);
-                noncePreset.content = `${nonce}\n${noncePreset.content}`;
-            }
             const writingStylePresets = enabledPresets.filter(p => p.name === BUILTIN_PRESETS.writingStyle.name);
             const cotPresets = enabledPresets.filter(p => p.name === 'COT');
             const systemPresets = enabledPresets.filter(p => p.name !== 'COT'
@@ -4487,9 +4477,10 @@ const app = createApp({
             systemPromptParts.push(userPrompt);
 
             // 7. 记忆引用：正文承接某条总结记忆时在句末标注编号，界面据此展示判断依据。
-            if (memorySettings.enabled && classicMemories.value.length > 0) {
-                systemPromptParts.push(BUILTIN_PROMPTS.memoryCitationInstruction);
-            }
+            // 聊天还没超过保留楼层时上下文里没有总结记忆，不发送引用要求。
+            const memoryCitationEnabled = memorySettings.enabled && classicMemories.value.length > 0
+                && postprocessedChatHistory.length > memorySettings.summaryKeepFloors;
+            if (memoryCitationEnabled) systemPromptParts.push(BUILTIN_PROMPTS.memoryCitationInstruction);
 
             const activeToolPrompt = buildActiveToolSystemPrompt(requestTools);
             if (activeToolPrompt) systemPromptParts.push(activeToolPrompt);
@@ -4502,7 +4493,8 @@ const app = createApp({
             if (mainModelUiTemplatePrompt) systemPromptParts.push(mainModelUiTemplatePrompt);
 
             if (cotPresets.length > 0) {
-                systemPromptParts.push(cotPresets.map(p => p.content).join('\n\n---\n\n'));
+                const cotContent = cotPresets.map(p => p.content).join('\n\n---\n\n');
+                systemPromptParts.push(memoryCitationEnabled ? cotContent : cotContent.replace(`${BUILTIN_PROMPTS.memoryCitationCotLine}\n`, ''));
             }
 
             const systemPrompt = systemPromptParts.join('\n\n');
