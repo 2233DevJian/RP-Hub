@@ -463,7 +463,6 @@ html:-webkit-full-screen #app .app-main {
     .app-navigation-item:hover .app-navigation-icon { transform: scale(1.08); }
     .app-navigation-item.is-current:hover { background: rgb(var(--primary-500) / 0.14); color: var(--c-accent-text); }
     .app-navigation-close:hover { background: rgb(var(--gray-500) / 0.12); color: var(--c-text); }
-    :where(.app-navigation-close):hover { transform: rotate(90deg); }
 }
 
 /* Panel springs open from its trigger; items follow in a short cascade. */
@@ -1106,7 +1105,7 @@ label:is(:active, :focus-within) .settings-toggle::after { transition: transform
     background: rgb(var(--primary-500) / 0.12);
     color: var(--c-accent-text);
     font-family: var(--font-sans);
-    font-size: 0.8em;
+    font-size: 0.75em;
     font-weight: 700;
     line-height: 1;
     vertical-align: 0.4em;
@@ -1114,6 +1113,8 @@ label:is(:active, :focus-within) .settings-toggle::after { transition: transform
     transition: background-color var(--dur-2) ease;
 }
 .memory-cite:focus-visible { outline: 2px solid rgb(var(--primary-400)); outline-offset: 1px; }
+/* In the thinking timeline the chip sits on the text line at the same size as the reasoning text. */
+.timeline-thinking-detail .memory-cite { margin: 0; font-size: 1em; vertical-align: baseline; }
 @media (hover: hover) and (pointer: fine) {
     .memory-cite:hover { background: rgb(var(--primary-500) / 0.22); }
     .memory-cite-text:hover { background: rgb(var(--primary-500) / 0.08); }
@@ -1774,7 +1775,6 @@ button.sortable-item-main:focus-visible { outline: 2px solid rgb(var(--primary-4
     box-shadow: var(--glass-highlight), var(--shadow-3);
 }
 .chat-quick-panel .settings-toggle--compact { position: relative; }
-.chat-quick-panel .settings-toggle-input:checked + .settings-toggle--compact::after { left: calc(100% - 1.1875rem); transform: none; }
 .chat-quick-panel .compact-range { height: 20px; margin: 0; background: linear-gradient(rgb(var(--gray-300)), rgb(var(--gray-300))) center / 100% 3px no-repeat; }
 .chat-model-slots > .segmented-switch__indicator {
     inset-block-end: auto;
@@ -2532,7 +2532,6 @@ button.sortable-item-main:focus-visible { outline: 2px solid rgb(var(--primary-4
     .usage-row:hover { background: rgb(var(--gray-500) / 0.05); }
     .choice-card:hover .choice-card__icon { transform: scale(1.1) rotate(-4deg); }
     .choice-card:hover::after { transform: translateX(2px) rotate(45deg); }
-    .modal-close-button:hover { transform: rotate(90deg); }
     .generated-image-reroll:hover { transform: rotate(-30deg) scale(1.08); }
 }
 

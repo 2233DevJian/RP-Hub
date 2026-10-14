@@ -787,7 +787,7 @@
                                         <label class="flex cursor-pointer items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100">
                                             <span>Gemini抗截断</span>
                                             <span class="relative inline-flex flex-none items-center">
-                                                <input v-model="settings.preventTruncation" type="checkbox" class="settings-toggle-input sr-only">
+                                                <input v-model="settings.preventTruncation" @change="$event.target.checked && (settings.stream = true)" type="checkbox" class="settings-toggle-input sr-only">
                                                 <span class="settings-toggle settings-toggle--compact settings-toggle--solid"></span>
                                             </span>
                                         </label>
