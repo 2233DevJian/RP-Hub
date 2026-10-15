@@ -4368,7 +4368,6 @@ const app = createApp({
             const obfuscateInput = /gemini/i.test(String(requestModel || ''));
             const latestUserMessage = [...chatHistory.value].reverse().find(message => message?.role === 'user');
             const latestUserIndex = chatHistory.value.indexOf(latestUserMessage);
-            let inputToolContent = '';
             const requestTools = activeToolDepth < ACTIVE_TOOL_MAX_AUTO_CONTINUE ? getEnabledActiveTools() : [];
 
             if (!currentCharacter.value) {
@@ -4676,11 +4675,6 @@ const app = createApp({
                         let content = stripUiTemplateContextInjection(parsedData.main);
                         if (!settings.uiTemplateEnabled || !settings.uiTemplateMainModelAnalysis) content = stripUiTemplateUpdateBlock(content);
                         content = stripMemoryCitations(stripDisabledImageGenContext(stripNextResponsePrompt(content)));
-                        // 仅把最新真实输入移到工具结果，图片说明和附加要求仍留在用户消息中。
-                        if (obfuscateInput && source === latestUserMessage && content.trim()) {
-                            inputToolContent = content;
-                            content = '读取 read_user_input 的返回内容，作为本轮用户输入继续回复。';
-                        }
                         const recentThinking = source.role === 'assistant' ? recentThinkingByMessage.get(source) : '';
                         if (recentThinking) content = `${wrapAnalysis(retainedThinkingTag, recentThinking)}${content}`;
                         if (source === openingSourceMessage && openingThinking) content = `${openingThinking}${content}`;
@@ -4743,16 +4737,6 @@ const app = createApp({
                     depth: array.length - 1 - index
                 })
             }));
-
-            // 在角色合并和正则之后插入完整配对，避免工具调用编号被后处理移除。
-            if (inputToolContent) {
-                const inputIndex = messages.findIndex(message => message.role === 'user'
-                    && message._sourceIndexes?.includes(latestUserIndex));
-                if (inputIndex !== -1) {
-                    messages.splice(inputIndex + 1, 0,
-                        ...buildUserInputToolMessages(inputToolContent, `call_${generateUUID()}`));
-                }
-            }
 
             let generatedAssistantMessageId = null;
             let assistantMessage = null;
@@ -4847,12 +4831,25 @@ const app = createApp({
                 }
                 if (requestSignal.aborted) throw createAbortReason();
 
+                // 最后再搬移整条用户消息，连同世界书、召回和本轮附加要求一起交给工具。
+                const inputIndex = obfuscateInput ? messages.findIndex(message => message.role === 'user'
+                    && message._sourceIndexes?.includes(latestUserIndex)) : -1;
+                if (inputIndex >= 0) {
+                    const inputMessage = messages[inputIndex];
+                    const [inputCall, inputResult] = buildUserInputToolMessages(inputMessage.content, `call_${generateUUID()}`);
+                    inputMessage.content = '读取 read_user_input 的返回内容，作为本轮用户输入继续回复。'
+                        + (isTruncationEnabled.value ? `(${BUILTIN_PROMPTS.replyToolInstruction.replace(/。$/, '')})` : '');
+                    for (const key of ['_worldInfoEntries', '_enhancedMemoryRecallCount']) {
+                        inputResult[key] = inputMessage[key];
+                        delete inputMessage[key];
+                    }
+                    messages.splice(inputIndex + 1, 0, inputCall, inputResult);
+                }
+
                 // 必须在正则、角色合并和记忆处理之后追加，保留 tool_call_id 及服务端签名。
                 messages.push(...activeToolMessages);
                 // 上下文查看器的数据只给弹窗用，长对话里整理一次要上百毫秒，等请求发出后再做。
                 const contextViewerInput = { messages, budgetedEntries, triggeredEntries, postprocessedChatHistory, worldInfoSettings };
-                const inputIndex = inputToolContent ? messages.findIndex(message => message.role === 'user'
-                    && message._sourceIndexes?.includes(latestUserIndex)) : -1;
                 const inputPrompt = inputIndex >= 0 ? messages[inputIndex].content : '';
                 const apiMessages = messages.map(({ role, name, content, tool_calls, tool_call_id, reasoning_content, reasoning, reasoning_details, extra_content }) => ({
                     role,
