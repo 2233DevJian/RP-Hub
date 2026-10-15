@@ -580,7 +580,6 @@ const app = createApp({
             immersiveMode: false,
             showLatestUsageBar: false,
             preventTruncation: false,
-            inputObfuscation: false,
             styleFilterEnabled: true,
             uiTemplateEnabled: false,
             uiTemplateModel: '',
@@ -4366,7 +4365,7 @@ const app = createApp({
             const continueAssistantMessageId = options.continueAssistantMessageId || null;
             const continuationToolCallId = options.continuationToolCallId || null;
             const requestModel = settings.model;
-            const obfuscateInput = /gemini/i.test(String(requestModel || '')) && settings.inputObfuscation === true;
+            const obfuscateInput = /gemini/i.test(String(requestModel || ''));
             const latestUserMessage = [...chatHistory.value].reverse().find(message => message?.role === 'user');
             const latestUserIndex = chatHistory.value.indexOf(latestUserMessage);
             let inputToolContent = '';
@@ -4852,12 +4851,9 @@ const app = createApp({
                 messages.push(...activeToolMessages);
                 // 上下文查看器的数据只给弹窗用，长对话里整理一次要上百毫秒，等请求发出后再做。
                 const contextViewerInput = { messages, budgetedEntries, triggeredEntries, postprocessedChatHistory, worldInfoSettings };
-                setTimeout(() => {
-                    const contextViewerState = buildContextViewerState(contextViewerInput);
-                    lastContextMessages.value = contextViewerState.contextMessages;
-                    lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
-                }, 0);
-
+                const inputIndex = inputToolContent ? messages.findIndex(message => message.role === 'user'
+                    && message._sourceIndexes?.includes(latestUserIndex)) : -1;
+                const inputPrompt = inputIndex >= 0 ? messages[inputIndex].content : '';
                 const apiMessages = messages.map(({ role, name, content, tool_calls, tool_call_id, reasoning_content, reasoning, reasoning_details, extra_content }) => ({
                     role,
                     name,
@@ -4869,9 +4865,26 @@ const app = createApp({
                     ...(reasoning_details ? { reasoning_details } : {}),
                     ...(extra_content ? { extra_content } : {})
                 }));
+                const prepareRequest = () => {
+                    if (inputIndex >= 0) {
+                        // UUID 转成零宽字符，每次实际请求（含自动重试）生成新的前缀。
+                        const alphabet = '\u200B\u200C\u200D\u2060';
+                        const prefix = [...generateUUID().replace(/-/g, '')].map(char => {
+                            const value = parseInt(char, 16);
+                            return alphabet[value >> 2] + alphabet[value & 3];
+                        }).join('');
+                        messages[inputIndex].content = apiMessages[inputIndex].content = prefix + inputPrompt;
+                    }
+                    setTimeout(() => {
+                        const contextViewerState = buildContextViewerState(contextViewerInput);
+                        lastContextMessages.value = contextViewerState.contextMessages;
+                        lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
+                    }, 0);
+                };
                 const responseResult = await requestTrackedChatCompletion({
                     model: requestModel,
                     messages: apiMessages,
+                    onBeforeRequest: prepareRequest,
                     logResponse: true,
                     replyInTool: isTruncationEnabled.value,
                     tools: buildActiveToolDefinitions(requestTools),

@@ -290,6 +290,7 @@
             pendingReasoning += reasoning;
         };
         try {
+            options.onBeforeRequest?.();
             const tools = [...(options.tools || []), ...(options.replyInTool && !options.requireTool ? [replyTool] : [])];
             return await withApiResponse({ ...options, onErrorResponse: text => {
                 if (logResponse) rawResponse = text;

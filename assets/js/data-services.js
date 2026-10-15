@@ -727,8 +727,9 @@
             });
 
             const recallCount = Number(message._enhancedMemoryRecallCount) || 0;
-            const isMemory = recallCount > 0 || (message.role !== 'system' && isRoleMemoryContextContent(message.content));
-            if (isMemory) {
+            // 附加召回片段不改变原消息的角色，仍保留记忆提示和高亮。
+            const isMemory = message.role !== 'system' && isRoleMemoryContextContent(message.content);
+            if (isMemory || recallCount > 0) {
                 const memoryName = recallCount ? '增强记忆召回' : '角色记忆';
                 const memoryTrigger = recallCount ? `已注入 ${recallCount} 条总结` : '已注入';
                 injectedWorldInfos.set(memoryName, memoryTrigger);
@@ -754,7 +755,7 @@
                 /\[M\d{1,6}\]/g,
                 '<mark class="bg-primary-200/80 text-primary-900 border-b border-primary-400 font-bold px-1 rounded shadow-sm">$&</mark>'
             );
-            if (isMemory) {
+            if (isMemory || recallCount > 0) {
                 renderedContent = renderedContent.replace(
                     /&lt;\/?(?:enhanced_memory_recall|memory_fragment)\b[\s\S]*?&gt;/g,
                     '<mark class="bg-primary-200/80 text-primary-900 border-b border-primary-400 font-bold px-1 rounded shadow-sm">$&</mark>'
