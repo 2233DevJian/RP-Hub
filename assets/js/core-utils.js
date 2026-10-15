@@ -71,13 +71,6 @@ const parseCot = (text) => {
 // 后一个 image### 不能作为前一个标签的结尾。
 const getImageTagRegex = () => /image###((?:(?!image###|###)[^\r\n])*?)(?:###|(?=\r?\n)|$)/gi;
 
-const encodeUnicodeInput = (text) => String(text ?? '')
-    .split(/(<[^>]*>|⟦U:[0-9a-fA-F\s]+⟧)/g)
-    .map(part => /^(?:<[^>]*>|⟦U:[0-9a-fA-F\s]+⟧)$/.test(part) ? part : part.replace(
-        /[A-Za-z\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u{20000}-\u{2EBEF}\u{30000}-\u{323AF}]+/gu,
-        value => `⟦U:${Array.from(value, character => character.codePointAt(0).toString(16).toUpperCase()).join(' ')}⟧`
-    )).join('');
-
 const compressImage = (source, maxWidth = 300, quality = 0.7) => new Promise((resolve) => {
     const image = new Image();
     image.src = source;
@@ -260,7 +253,6 @@ const getToastIcon = (message, type = 'info') => {
 window.RPHubUtils = {
     compressImage,
     defaultAvatar,
-    encodeUnicodeInput,
     extractApiErrorMessage,
     formatApiErrorMessage,
     generateUUID,
