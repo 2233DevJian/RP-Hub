@@ -796,7 +796,7 @@
                             </div>
                         </transition>
                         <textarea v-model="userInput" @input="autoResizeInput" @focus="handleChatInputFocus"
-                            @blur="handleChatInputBlur" @keydown.enter.exact.prevent="sendMessage"
+                            @blur="handleChatInputBlur" enterkeyhint="enter"
                             :placeholder="'输入消息...'"
                             class="island-input chat-input-scrollbar"
                             rows="1" ref="inputBox"></textarea>
