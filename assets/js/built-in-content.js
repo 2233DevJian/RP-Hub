@@ -760,13 +760,13 @@ ${closingInstruction}
 
 // --- Update announcement (keep this section at the bottom) ---
 window.RPHubLatestUpdate = Object.freeze({
-    id: 10221,
+    id: 10222,
     title: '网站公告',
     content: `
 ### RP-Hub 2.0.3
 
-- Gemini模型快捷面板新增“输入混淆”，解决输入审查，无注意力与智商损耗
+- 快捷面板新增“输入混淆”，解决输入审查，无注意力与智商损耗（Gemini模型）
 
-#### 更新时间：10/15/11:28
+#### 更新时间：10/15/12:00
     `
 });
