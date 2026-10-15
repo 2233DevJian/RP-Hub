@@ -40,6 +40,7 @@ const {
 const {
     compressImage,
     defaultAvatar,
+    encodeUnicodeInput,
     generateUUID,
     getApiUsagePayload,
     getImageTagRegex,
@@ -580,6 +581,7 @@ const app = createApp({
             immersiveMode: false,
             showLatestUsageBar: false,
             preventTruncation: false,
+            inputObfuscation: false,
             styleFilterEnabled: true,
             uiTemplateEnabled: false,
             uiTemplateModel: '',
@@ -4365,6 +4367,8 @@ const app = createApp({
             const continueAssistantMessageId = options.continueAssistantMessageId || null;
             const continuationToolCallId = options.continuationToolCallId || null;
             const requestModel = settings.model;
+            const obfuscateInput = /gemini/i.test(String(requestModel || '')) && settings.inputObfuscation === true;
+            const latestUserMessage = [...chatHistory.value].reverse().find(message => message?.role === 'user');
             const requestTools = activeToolDepth < ACTIVE_TOOL_MAX_AUTO_CONTINUE ? getEnabledActiveTools() : [];
 
             if (!currentCharacter.value) {
@@ -4672,6 +4676,8 @@ const app = createApp({
                         let content = stripUiTemplateContextInjection(parsedData.main);
                         if (!settings.uiTemplateEnabled || !settings.uiTemplateMainModelAnalysis) content = stripUiTemplateUpdateBlock(content);
                         content = stripMemoryCitations(stripDisabledImageGenContext(stripNextResponsePrompt(content)));
+                        // 只转码最新真实输入，历史原文及随后追加的图片说明、提示词保持原样。
+                        if (obfuscateInput && source === latestUserMessage) content = encodeUnicodeInput(content);
                         const recentThinking = source.role === 'assistant' ? recentThinkingByMessage.get(source) : '';
                         if (recentThinking) content = `${wrapAnalysis(retainedThinkingTag, recentThinking)}${content}`;
                         if (source === openingSourceMessage && openingThinking) content = `${openingThinking}${content}`;
