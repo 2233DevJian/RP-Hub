@@ -3,7 +3,7 @@ const { useStorageManagement, useTokenUsage } = window.RPHubComposables;
 const { createMessageRenderer } = window.RPHubMessageRenderer;
 const { AppNavigation } = window.RPHubLayoutComponents;
 const { requestChatCompletion, requestJson } = window.RPHubApiClient;
-const { buildApiEndpoint } = window.RPHubApiUtils;
+const { buildApiEndpoint, buildUserInputToolMessages } = window.RPHubApiUtils;
 const {
     ActionConfirmModal,
     ActiveToolEditorModal,
@@ -27,6 +27,7 @@ const {
     SettingsHelp,
     SettingsPageHeader,
     MemoryBackfillModal,
+    MemoryCitationModal,
     StoryBranchModal,
     TokenUsageView,
     UiTemplatesView,
@@ -42,6 +43,7 @@ const {
     generateUUID,
     getApiUsagePayload,
     getImageTagRegex,
+    getToastIcon,
     normalizeApiUsage,
     parseCot,
     stringifyErrorDetail
@@ -49,11 +51,14 @@ const {
 const {
     buildSummaryEmbeddingText,
     cosineSimilarity,
+    flattenClassicMemories,
     getClassicMemoryKey,
+    getNextClassicMemoryNo,
     getSummaryEmbedding,
     getSummarySources,
     markRuntimeRaw,
     normalizeEmbedding,
+    numberClassicMemories,
     prepareClassicMemoriesForRuntime,
     quantizeEmbeddingForStorage,
     trimMemoryText
@@ -186,6 +191,7 @@ const app = createApp({
         SettingsHelp,
         SettingsPageHeader,
         MemoryBackfillModal,
+        MemoryCitationModal,
         StoryBranchModal,
         TokenUsageView,
         UiTemplatesView,
@@ -198,7 +204,6 @@ const app = createApp({
     setup() {
         const cardUtils = window.RPHubCardUtils;
         const {
-            fontFamilies: fontFamilyOptions,
             fontSizes: fontSizeOptions,
             imageCounts: imageGenCountOptions,
             imageModels: imageModelOptions,
@@ -395,7 +400,7 @@ const app = createApp({
                 if (userInput.value === '') {
                     inputBox.value.style.height = '';
                 } else {
-                    inputBox.value.style.height = Math.min(inputBox.value.scrollHeight, 180) + 'px';
+                    inputBox.value.style.height = inputBox.value.scrollHeight + 'px';
                 }
             }
         };
@@ -581,8 +586,6 @@ const app = createApp({
             uiTemplateAnalysisDepth: 4,
             uiTemplateInjectContext: false,
             uiTemplateMainModelAnalysis: true,
-            fontFamily: 'modern',
-            fontFamilyVersion: 4,
             fontSize: window.innerWidth > 768 ? 16 : 14,
             imageGenKey: '',
             imageStyle: 'vertical',
@@ -601,15 +604,10 @@ const app = createApp({
             : imageStyleOptions);
         const getImageModelName = (value) => (imageModelOptions.find(option => option.value === value)?.label
             || imageModelOptions[0].label).replace(/（[^）]*）$/, '');
-        const normalizeFontFamily = (value) => ['modern', 'serif', 'system'].includes(value) ? value : 'modern';
         const normalizeFontSize = (value) => {
             const size = Number(value);
             return Number.isFinite(size) ? Math.max(12, Math.min(20, Math.round(size))) : 16;
         };
-        const applyFontFamily = (value) => {
-            document.documentElement.dataset.appFont = normalizeFontFamily(value);
-        };
-        watch(() => settings.fontFamily, applyFontFamily, { immediate: true });
 
         const showApiProviderSelector = ref(false);
         const selectedApiProviderId = ref(DEFAULT_API_PROVIDER_ID);
@@ -727,11 +725,20 @@ const app = createApp({
         let workshopImportPending = false;
         let squareImportPending = false;
         const getSquareFrame = () => document.querySelector(`iframe[src="${squareUrl.value}"]`);
+        // The plaza follows RP-Hub's day/night theme while it is embedded here.
+        const sendSquareTheme = (target = getSquareFrame()?.contentWindow) => target?.postMessage(
+            { type: 'RPHUB_THEME', theme: document.documentElement.dataset.appTheme }, new URL(squareUrl.value).origin
+        );
+        window.addEventListener('rphub-theme-change', () => sendSquareTheme());
         // Each embedded page may only use its own message bridge.
         window.addEventListener('message', async (event) => {
-            if (event.data?.type === 'RPH_FORUM_READY' || event.data?.type === 'RPH_FORUM_IMPORT_CARD') {
+            if (['RPH_FORUM_READY', 'RPH_FORUM_IMPORT_CARD', 'RPH_FORUM_THEME_REQUEST'].includes(event.data?.type)) {
                 const iframe = getSquareFrame();
                 if (!iframe || event.source !== iframe.contentWindow || event.origin !== new URL(squareUrl.value).origin) return;
+                if (event.data.type === 'RPH_FORUM_THEME_REQUEST') {
+                    sendSquareTheme(event.source);
+                    return;
+                }
                 if (event.data.type === 'RPH_FORUM_READY') {
                     event.source.postMessage({ type: 'RPHUB_IMPORT_READY' }, event.origin);
                     return;
@@ -841,10 +848,10 @@ const app = createApp({
             }
 
             syncSettingsToGenerator();
-        }, { deep: true });
+        });
 
         // Watch image gen and model settings for sync
-        watch(() => [settings.imageGenKey, settings.imageModel, settings.imageStyle, settings.customImageArtists, settings.imageGenCount, settings.qualityModel, settings.balancedModel, settings.fastModel, settings.uiTemplateModel, settings.fontFamily, settings.fontFamilyVersion], () => {
+        watch(() => [settings.imageGenKey, settings.imageModel, settings.imageStyle, settings.customImageArtists, settings.imageGenCount, settings.qualityModel, settings.balancedModel, settings.fastModel, settings.uiTemplateModel], () => {
             syncSettingsToGenerator();
         });
 
@@ -1052,9 +1059,19 @@ const app = createApp({
             }
             return filtered + source.slice(filterEnd);
         };
+        // 历史回复的文风过滤结果按原文缓存，长对话每次组装上下文不必全部重跑；开关变化时清空。
+        const styleFilteredContentCache = new Map();
+        watch(() => settings.styleFilterEnabled, () => styleFilteredContentCache.clear());
+        const getStyleFilteredContent = (content) => {
+            if (styleFilteredContentCache.has(content)) return styleFilteredContentCache.get(content);
+            const filtered = filterBlockedStyleText(content);
+            styleFilteredContentCache.set(content, filtered);
+            if (styleFilteredContentCache.size > 2000) styleFilteredContentCache.delete(styleFilteredContentCache.keys().next().value);
+            return filtered;
+        };
         const getPostprocessedChatMessages = (messages = chatHistory.value, options = {}) => (
             postprocessChatHistory(messages, options).map(message => message.role === 'assistant'
-                ? { ...message, content: filterBlockedStyleText(message.content) }
+                ? { ...message, content: getStyleFilteredContent(message.content) }
                 : message)
         );
         const buildConversationTurnSnapshot = (messages = chatHistory.value, options = {}) => (
@@ -1118,7 +1135,8 @@ const app = createApp({
         const MEMORY_MODE_ENHANCED = 'enhanced';
         const MEMORY_MODE_CLASSIC = 'classic';
         const SUMMARY_KEEP_FLOORS_MIN = 10;
-        const SUMMARY_KEEP_FLOORS_MAX = 40;
+        // 50 楼约等于 25 轮，正好接上二次压缩的起点（25 轮以前）；再高会让被切开的合并总结与保留的原文重复。
+        const SUMMARY_KEEP_FLOORS_MAX = 50;
         const SUMMARY_KEEP_FLOORS_DEFAULT = 20;
         const LIST_PAGE_SIZE = 10;
         const classicMemories = ref([]);
@@ -1336,8 +1354,6 @@ const app = createApp({
             (total, message) => total + String(message?.content || '').length,
             0
         ));
-        const lastContextFloorCount = computed(() => lastContextMessages.value
-            .filter(message => Number.isFinite(message?.floor)).length);
         const CHARACTER_SCOPED_STORAGE_NAMES = ['chat', 'classic_memories', 'branches'];
         const {
             clearTokenUsageHistory,
@@ -1345,13 +1361,11 @@ const app = createApp({
             filteredTokenUsageHistory,
             formatTokenAggregate,
             formatLatestTokenCount,
-            formatLatestUsageCost,
             formatTokenCount,
             formatTokenUsageTime,
-            getTokenUsageTypeLabel,
+            getTokenUsageCategory,
             getUncachedInputTokens,
             recordApiUsage,
-            saveTokenUsageHistoryNow,
             showTokenUsageTimeFilter,
             tokenUsageFilter,
             tokenUsageHistory,
@@ -1753,10 +1767,6 @@ const app = createApp({
                 } else {
                     normalizeApiProviderSettings();
                 }
-                if ((!savedSettings || Number(savedSettings.fontFamilyVersion || 0) < 4) && settings.fontFamily === 'serif') {
-                    settings.fontFamily = 'modern';
-                }
-                settings.fontFamily = normalizeFontFamily(settings.fontFamily);
                 settings.fontSize = normalizeFontSize(settings.fontSize);
                 if (settings.reasoningEffort === 'xhigh') settings.reasoningEffort = 'max';
                 if (!imageModelOptions.some(option => option.value === settings.imageModel)) {
@@ -1767,8 +1777,9 @@ const app = createApp({
                     settings.imageSize = legacySize.includes('横') ? '横图' : legacySize.includes('方') ? '方图' : '竖图';
                 }
                 settings.imageGenCount = Math.min(8, Math.max(2, Math.round(Number(settings.imageGenCount) || 2)));
-                settings.fontFamilyVersion = 4;
-                applyFontFamily(settings.fontFamily);
+                // Fonts are chosen per context now; drop the retired global font setting.
+                delete settings.fontFamily;
+                delete settings.fontFamilyVersion;
                 delete settings.renderLayerLimit;
                 settings.contextSize = MAX_CONTEXT_SIZE;
                 settings.stream = true;
@@ -1864,13 +1875,14 @@ const app = createApp({
 
         // Sync World Info and Regex to Current Character
         watch(worldInfo, (newVal) => {
+            // 切换或加载角色时世界书本就是“全局 + 该角色”拼出来的，无需反向同步，省下整份世界书的几轮序列化。
+            if (_isApplyingCharacterScopedData) return;
             const normalized = JSON.parse(JSON.stringify(newVal)).map(normalizeWorldInfoEntry);
             const globalEntries = normalized.filter(entry => entry.scope === 'global');
             if (JSON.stringify(globalWorldInfo.value) !== JSON.stringify(globalEntries)) {
                 globalWorldInfo.value = globalEntries;
             }
             if (currentCharacterIndex.value !== -1 && characters.value[currentCharacterIndex.value]) {
-                if (_isApplyingCharacterScopedData) return;
                 // Only update if different to avoid infinite loops or unnecessary updates
                 const char = characters.value[currentCharacterIndex.value];
                 const characterEntries = normalized.filter(entry => entry.scope !== 'global');
@@ -2305,6 +2317,27 @@ const app = createApp({
         const currentCharacter = computed(() => {
             return currentCharacterIndex.value >= 0 ? characters.value[currentCharacterIndex.value] : null;
         });
+        // PNG 角色卡的头像连同整张卡的数据一起保存，可达十几 MB。界面显示改用短的 blob 地址，
+        // 否则每次重绘背景样式、每新建一个消息头像，浏览器都要重新解析整段 data URL。
+        let avatarDisplayCache = { source: '', url: '' };
+        const currentCharacterAvatar = computed(() => {
+            const source = currentCharacter.value?.avatar || '';
+            const comma = source.indexOf(',');
+            if (source.length < 1e6 || !/^data:[^,]*;base64$/.test(source.slice(0, comma))) return source;
+            if (avatarDisplayCache.source !== source) {
+                if (avatarDisplayCache.url) URL.revokeObjectURL(avatarDisplayCache.url);
+                try {
+                    const binary = atob(source.slice(comma + 1));
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                    const type = source.slice(5, comma).split(';')[0];
+                    avatarDisplayCache = { source, url: URL.createObjectURL(new Blob([bytes], { type })) };
+                } catch (_) {
+                    avatarDisplayCache = { source, url: source };
+                }
+            }
+            return avatarDisplayCache.url;
+        });
         const scopeOptions = computed(() => [
             { value: 'character', label: '绑定当前角色卡', disabled: !currentCharacter.value },
             { value: 'global', label: '全局生效' }
@@ -2587,6 +2620,8 @@ const app = createApp({
         const stripNextResponsePrompt = (text) => String(text || '')
             .replace(/<next_response>[\s\S]*?<\/next_response>/gi, '')
             .replace(/<next_response>[\s\S]*$/gi, '');
+        // 正文里的记忆引用 [M12] 只给界面展示，发回模型、做总结、检索和复制时去掉。
+        const stripMemoryCitations = (text) => String(text || '').replace(/\[M\d{1,6}\]/g, '');
 
         const buildUiTemplateContextSystemPrompt = () => {
             if (!settings.uiTemplateEnabled || !settings.uiTemplateInjectContext || settings.uiTemplateMainModelAnalysis) return '';
@@ -2876,8 +2911,9 @@ const app = createApp({
         });
 
         const conversationBodyLength = computed(() => getConversationBodyLength(chatHistory.value));
+        // 楼层数只看条数，不必给每条回复跑文风过滤。
         const chatRoundStats = computed(() => ({
-            floors: getPostprocessedChatMessages(chatHistory.value, { includeSystem: false }).length
+            floors: postprocessChatHistory(chatHistory.value, { includeSystem: false }).length
         }));
         const currentStoryBranch = computed(() => (
             storyBranches.value.find(branch => branch.id === activeStoryBranchId.value) || null
@@ -3056,11 +3092,15 @@ const app = createApp({
                 : 0;
         });
 
+        const selectableModels = computed(() => ['quickModels', 'memoryClassicModel'].includes(modelSelectionTarget.value)
+            ? availableModels.value.filter(model => !/embedding/i.test(model.id))
+            : availableModels.value);
+
         const modelTags = computed(() => {
-            const counts = { all: availableModels.value.length, other: 0 };
+            const counts = { all: selectableModels.value.length, other: 0 };
             const tags = new Set();
 
-            availableModels.value.forEach(m => {
+            selectableModels.value.forEach(m => {
                 const id = m.id.toLowerCase();
                 let found = false;
                 for (const family of popularModelFamilies) {
@@ -3082,7 +3122,7 @@ const app = createApp({
         });
 
         const filteredModels = computed(() => {
-            let result = availableModels.value;
+            let result = selectableModels.value;
 
             if (activeModelTag.value && activeModelTag.value !== 'all') {
                 if (activeModelTag.value === 'other') {
@@ -3101,7 +3141,7 @@ const app = createApp({
                 result = result.filter(m => m.id.toLowerCase().includes(query));
             }
 
-            return result.sort((a, b) => a.id.localeCompare(b.id));
+            return [...result].sort((a, b) => a.id.localeCompare(b.id));
         });
 
         const getCharacterWICount = (char) => {
@@ -3123,7 +3163,7 @@ const app = createApp({
         // Toast Notification
         const showToast = (message, type = 'info', duration = 2000) => {
             const id = `${Date.now()}-${toastIdSeed++}`;
-            toasts.value.push({ id, message, type });
+            toasts.value.push({ id, message, type, icon: getToastIcon(message, type) });
             setTimeout(() => {
                 toasts.value = toasts.value.filter(t => t.id !== id);
             }, duration);
@@ -3179,6 +3219,14 @@ const app = createApp({
                 .replace(/[ \t]+\n/g, '\n')
                 .replace(/\n{3,}/g, '\n\n')
                 .trim();
+        };
+        // 先确认能匹配再替换：全局替换不论命中与否都会先解析整段替换文本，
+        // 卡里几百 KB 的界面模板会在每条消息的每个片段上被重复解析。
+        const replaceMatched = (text, re, replacement) => {
+            re.lastIndex = 0;
+            const matched = re.test(text);
+            re.lastIndex = 0;
+            return matched ? text.replace(re, replacement) : text;
         };
         const processRegex = (text, options = {}) => {
             if (!text) return '';
@@ -3247,9 +3295,9 @@ const app = createApp({
                         // 完整保留原文的整条包裹只执行一次，避免给面板内每段文字重复套壳。
                         result = wrapped !== null && wrapped.includes(result)
                             ? wrapped
-                            : cardUtils.transformUnprotectedText(result, part => part.replace(re, replacement));
+                            : cardUtils.transformUnprotectedText(result, part => replaceMatched(part, re, replacement));
                     } else {
-                        result = result.replace(re, replacement);
+                        result = replaceMatched(result, re, replacement);
                     }
 
                 } catch (e) {
@@ -3258,16 +3306,27 @@ const app = createApp({
             });
             return role === 'assistant' ? filterBlockedStyleText(result) : result;
         };
+        // 记忆编号对应的轮次（单轮 3，合并总结 1-5），正文角标和判断依据弹窗都显示轮次。
+        const memoryCitationLabels = computed(() => new Map(flattenClassicMemories(classicMemories.value)
+            .filter(memory => Number.isInteger(memory.no))
+            .map(memory => {
+                const range = getClassicMemoryTurnRange(memory);
+                return [memory.no, range.start === range.end ? String(range.start) : `${range.start}-${range.end}`];
+            })));
+        const memoryCitationVersion = computed(() => [...memoryCitationLabels.value].map(entry => entry.join(':')).join(','));
         const {
             clearCaches: clearMessageRenderCaches,
             contentUsesHtmlFrame,
+            decorateMemoryCitations,
             renderMarkdown
         } = createMessageRenderer({
             processRegex,
             replaceUserPlaceholder: replaceUserNamePlaceholder,
             createExecutableHtmlIframe,
             marked,
-            DOMPurify
+            DOMPurify,
+            getMemoryCitationLabel: no => memoryCitationLabels.value.get(no),
+            getMemoryCitationVersion: () => memoryCitationVersion.value
         });
         watch(() => [settings.disableImages, settings.styleFilterEnabled, regexScripts.value, user.name], () => {
             clearMessageRenderCaches();
@@ -3644,6 +3703,7 @@ const app = createApp({
             let finalContent = content;
             if (cardInteraction) {
                 chatHistory.value.push({
+                    id: generateUUID(),
                     role: 'user',
                     content: cardInteraction,
                     isSelf: true,
@@ -3655,6 +3715,7 @@ const app = createApp({
             if (finalContent || imageAttachments.length) {
                 // Add user message locally with NAME
                 chatHistory.value.push({
+                    id: generateUUID(),
                     role: 'user',
                     name: user.name,
                     content: finalContent,
@@ -3738,7 +3799,7 @@ const app = createApp({
         };
 
         const copyMessage = (content) => {
-            navigator.clipboard.writeText(stripUiTemplateUpdateBlock(content)).then(() => {
+            navigator.clipboard.writeText(stripMemoryCitations(stripUiTemplateUpdateBlock(content))).then(() => {
                 showToast('已复制到剪贴板', 'success');
             }).catch(err => {
                 console.error('Copy failed:', err);
@@ -3919,10 +3980,6 @@ const app = createApp({
                 const failedTemplateIds = new Set();
                 const pendingTemplateUpdates = [];
 
-                const normalizeUiTemplateUpdates = (parsed, template) => {
-                    return normalizeUiTemplateUpdateList(parsed, [template]);
-                };
-
                 const applyTemplateUpdates = (template, updates, model) => {
                     updates.forEach(update => {
                         const result = applyUiTemplateUpdateListToTemplate(template, [update], { model, turn });
@@ -3939,7 +3996,7 @@ const app = createApp({
                         const currentVariableJson = JSON.stringify(template.variableState || {}, null, 2);
                         const variableSchemaText = stringifyUiSchema(template.variableSchema).trim();
                         const result = await requestTrackedChatCompletion({
-                            model, temperature: 0.2, stream: false,
+                            model, temperature: 0.4, stream: false,
                             messages: [
                                 {
                                     role: 'system',
@@ -3968,7 +4025,7 @@ const app = createApp({
                         console.info('[UI模板][副模型] 最新一次变量输出：', latestUiTemplateAnalysis);
                         const updateBlock = findUiTemplateUpdateBlock(content);
                         const parsed = parseUiTemplateUpdates(updateBlock ? updateBlock[1] : content, [template]);
-                        const updates = normalizeUiTemplateUpdates(parsed, template);
+                        const updates = normalizeUiTemplateUpdateList(parsed, [template]);
                         pendingTemplateUpdates.push({ template, updates, model });
                     } catch (e) {
                         if (updateRun.signal.aborted || !isCurrentRun()) return;
@@ -4245,9 +4302,9 @@ const app = createApp({
                     properties: {
                         min: { type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER, description: '随机整数的下限，包含该值。' },
                         max: { type: 'integer', minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER, description: '随机整数的上限，包含该值，不小于 min。' },
+                        choices: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1, description: '自定义候选名称，从中等概率抽取一项；与 min、max 二选一，不可同时传入。' },
                         reason: { type: 'string', description: '可选，一句话说明随机判定的用途。' }
                     },
-                    required: ['min', 'max'],
                     additionalProperties: false
                 } : {
                     type: 'object',
@@ -4301,7 +4358,6 @@ const app = createApp({
                 ? `(${BUILTIN_PROMPTS.replyToolInstruction.replace(/。$/, '')})` : '';
             target.content = `${String(target.content || '').trimEnd()}${replyToolReminder}\n\n${prompt}`;
         };
-        const usedGeminiPromptNonces = new Set();
         const generateResponse = async (startTime = null, options = {}) => {
             const reuseGeneratingState = options.reuseGeneratingState === true;
             if (isGenerating.value && !reuseGeneratingState) return;
@@ -4309,6 +4365,9 @@ const app = createApp({
             const continueAssistantMessageId = options.continueAssistantMessageId || null;
             const continuationToolCallId = options.continuationToolCallId || null;
             const requestModel = settings.model;
+            const obfuscateInput = /gemini/i.test(String(requestModel || ''));
+            const latestUserMessage = [...chatHistory.value].reverse().find(message => message?.role === 'user');
+            const latestUserIndex = chatHistory.value.indexOf(latestUserMessage);
             const requestTools = activeToolDepth < ACTIVE_TOOL_MAX_AUTO_CONTINUE ? getEnabledActiveTools() : [];
 
             if (!currentCharacter.value) {
@@ -4345,6 +4404,8 @@ const app = createApp({
                 }, 100);
             };
             startTimer(); // Start timer immediately upon request initiation
+            // 组装上下文是一段较长的同步计算，先让刚发出的气泡和等待动画画到屏幕上。
+            await yieldToUi();
 
 
             // --- Advanced World Info Processing ---
@@ -4363,15 +4424,6 @@ const app = createApp({
             const enabledPresets = presets.value
                 .map(normalizePreset)
                 .filter(p => isPresetEnabled(p) && p.content.trim());
-            const noncePreset = enabledPresets.find(p => p.role === 'system');
-            if (/gemini/i.test(requestModel) && noncePreset) {
-                let nonce;
-                do {
-                    nonce = Math.random().toString(36).slice(2, 8 + Math.floor(Math.random() * 3));
-                } while (!/^(?=.*[a-z])(?=.*\d)[a-z\d]{6,8}$/.test(nonce) || usedGeminiPromptNonces.has(nonce));
-                usedGeminiPromptNonces.add(nonce);
-                noncePreset.content = `${nonce}\n${noncePreset.content}`;
-            }
             const writingStylePresets = enabledPresets.filter(p => p.name === BUILTIN_PRESETS.writingStyle.name);
             const cotPresets = enabledPresets.filter(p => p.name === 'COT');
             const systemPresets = enabledPresets.filter(p => p.name !== 'COT'
@@ -4427,6 +4479,12 @@ const app = createApp({
             // 6. User Info (Moved to end)
             systemPromptParts.push(userPrompt);
 
+            // 7. 记忆引用：正文承接某条总结记忆时在句末标注编号，界面据此展示判断依据。
+            // 聊天还没超过保留楼层时上下文里没有总结记忆，不发送引用要求。
+            const memoryCitationEnabled = memorySettings.enabled && classicMemories.value.length > 0
+                && postprocessedChatHistory.length > memorySettings.summaryKeepFloors;
+            if (memoryCitationEnabled) systemPromptParts.push(BUILTIN_PROMPTS.memoryCitationInstruction);
+
             const activeToolPrompt = buildActiveToolSystemPrompt(requestTools);
             if (activeToolPrompt) systemPromptParts.push(activeToolPrompt);
             else if (activeToolDepth > 0) systemPromptParts.push('本轮工具调用已结束，请依据已有结果完成回复，不再调用工具；无法确认的信息明确说明。');
@@ -4438,7 +4496,8 @@ const app = createApp({
             if (mainModelUiTemplatePrompt) systemPromptParts.push(mainModelUiTemplatePrompt);
 
             if (cotPresets.length > 0) {
-                systemPromptParts.push(cotPresets.map(p => p.content).join('\n\n---\n\n'));
+                const cotContent = cotPresets.map(p => p.content).join('\n\n---\n\n');
+                systemPromptParts.push(memoryCitationEnabled ? cotContent : cotContent.replace(`${BUILTIN_PROMPTS.memoryCitationCotLine}\n`, ''));
             }
 
             const systemPrompt = systemPromptParts.join('\n\n');
@@ -4564,11 +4623,14 @@ const app = createApp({
                             content: getClassicSecondaryMemoryMarker(memory),
                             _sourceIndexes: [],
                             _preventContextMerge: true,
+                            _classicMemory: true,
                             _suppressUiTemplateCorrection: true
                         };
                         chatHistoryForContext[retainedAssistantIndex] = {
                             ...chatHistoryForContext[retainedAssistantIndex],
                             content: memory.summary,
+                            _memoryNo: memory.no,
+                            _classicMemory: true,
                             _sourceIndexes: []
                         };
                     });
@@ -4587,6 +4649,8 @@ const app = createApp({
                         chatHistoryForContext[assistantIndex] = {
                             ...chatHistoryForContext[assistantIndex],
                             content: memory.summary,
+                            _memoryNo: memory.no,
+                            _classicMemory: true,
                             _sourceIndexes: []
                         };
                     });
@@ -4610,7 +4674,7 @@ const app = createApp({
                         const parsedData = parseCot(source.content || '');
                         let content = stripUiTemplateContextInjection(parsedData.main);
                         if (!settings.uiTemplateEnabled || !settings.uiTemplateMainModelAnalysis) content = stripUiTemplateUpdateBlock(content);
-                        content = stripDisabledImageGenContext(stripNextResponsePrompt(content));
+                        content = stripMemoryCitations(stripDisabledImageGenContext(stripNextResponsePrompt(content)));
                         const recentThinking = source.role === 'assistant' ? recentThinkingByMessage.get(source) : '';
                         if (recentThinking) content = `${wrapAnalysis(retainedThinkingTag, recentThinking)}${content}`;
                         if (source === openingSourceMessage && openingThinking) content = `${openingThinking}${content}`;
@@ -4635,10 +4699,13 @@ const app = createApp({
                     return {
                         role: m.role === 'user' ? 'user' : 'assistant',
                         name: m.name || (m.role === 'user' ? user.name : currentCharacter.value.name),
-                        content: cleanContent,
+                        // 总结前带上编号（清理引用标记之后再加），召回片段用同一编号，模型才能在正文里引用。
+                        content: Number.isInteger(m._memoryNo) ? `[M${m._memoryNo}]\n${cleanContent}` : cleanContent,
                         _sourceIndexes: sourceIndexes,
                         _contextFloor: m._contextFloor,
-                        _preventContextMerge: m._preventContextMerge === true
+                        _preventContextMerge: m._preventContextMerge === true,
+                        // 被记忆替换的楼层（总结和合并标记），查看器把它们算作记忆而不是原文。
+                        _classicMemory: m._classicMemory === true
                     };
                 })
                 .filter(m => String(m.content || '').trim())
@@ -4764,18 +4831,26 @@ const app = createApp({
                 }
                 if (requestSignal.aborted) throw createAbortReason();
 
+                // 最后再搬移整条用户消息，连同世界书、召回和本轮附加要求一起交给工具。
+                const inputIndex = obfuscateInput ? messages.findIndex(message => message.role === 'user'
+                    && message._sourceIndexes?.includes(latestUserIndex)) : -1;
+                if (inputIndex >= 0) {
+                    const inputMessage = messages[inputIndex];
+                    const [inputCall, inputResult] = buildUserInputToolMessages(inputMessage.content, `call_${generateUUID()}`);
+                    inputMessage.content = '读取 read_user_input 的返回内容，作为本轮用户输入继续回复。'
+                        + (isTruncationEnabled.value ? `(${BUILTIN_PROMPTS.replyToolInstruction.replace(/。$/, '')})` : '');
+                    for (const key of ['_worldInfoEntries', '_enhancedMemoryRecallCount']) {
+                        inputResult[key] = inputMessage[key];
+                        delete inputMessage[key];
+                    }
+                    messages.splice(inputIndex + 1, 0, inputCall, inputResult);
+                }
+
                 // 必须在正则、角色合并和记忆处理之后追加，保留 tool_call_id 及服务端签名。
                 messages.push(...activeToolMessages);
-                const contextViewerState = buildContextViewerState({
-                    messages,
-                    budgetedEntries,
-                    triggeredEntries,
-                    postprocessedChatHistory,
-                    worldInfoSettings
-                });
-                lastContextMessages.value = contextViewerState.contextMessages;
-                lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
-
+                // 上下文查看器的数据只给弹窗用，长对话里整理一次要上百毫秒，等请求发出后再做。
+                const contextViewerInput = { messages, budgetedEntries, triggeredEntries, postprocessedChatHistory, worldInfoSettings };
+                const inputPrompt = inputIndex >= 0 ? messages[inputIndex].content : '';
                 const apiMessages = messages.map(({ role, name, content, tool_calls, tool_call_id, reasoning_content, reasoning, reasoning_details, extra_content }) => ({
                     role,
                     name,
@@ -4787,9 +4862,26 @@ const app = createApp({
                     ...(reasoning_details ? { reasoning_details } : {}),
                     ...(extra_content ? { extra_content } : {})
                 }));
+                const prepareRequest = () => {
+                    if (inputIndex >= 0) {
+                        // UUID 转成零宽字符，每次实际请求（含自动重试）生成新的前缀。
+                        const alphabet = '\u200B\u200C\u200D\u2060';
+                        const prefix = [...generateUUID().replace(/-/g, '')].map(char => {
+                            const value = parseInt(char, 16);
+                            return alphabet[value >> 2] + alphabet[value & 3];
+                        }).join('');
+                        messages[inputIndex].content = apiMessages[inputIndex].content = prefix + inputPrompt;
+                    }
+                    setTimeout(() => {
+                        const contextViewerState = buildContextViewerState(contextViewerInput);
+                        lastContextMessages.value = contextViewerState.contextMessages;
+                        lastTriggeredWorldInfos.value = contextViewerState.triggeredWorldInfos;
+                    }, 0);
+                };
                 const responseResult = await requestTrackedChatCompletion({
                     model: requestModel,
                     messages: apiMessages,
+                    onBeforeRequest: prepareRequest,
                     logResponse: true,
                     replyInTool: isTruncationEnabled.value,
                     tools: buildActiveToolDefinitions(requestTools),
@@ -4888,7 +4980,7 @@ const app = createApp({
                     appendAssistantResponseError(targetMessage, errorMessage);
                     if (continuingAssistantMessage) activeToolContinuationHasResponse.value = true;
                 } else {
-                    chatHistory.value.push({ role: 'system', name: currentCharacter.value.name, content: errorMessage, skipReveal: true });
+                    chatHistory.value.push({ role: 'system', name: currentCharacter.value.name, content: errorMessage, skipReveal: true, shouldAnimate: true });
                 }
             } finally {
                 if (assistantMessage?.content) {
@@ -4966,7 +5058,7 @@ const app = createApp({
                 ? indexes.map(index => chatHistory.value[index]).filter(source => source?.role === message.role)
                 : [message];
             return sources.map(source => appendMessageImageDescriptions(source,
-                stripNextResponsePrompt(stripUiTemplateContextInjection(parseCot(source.content || '').main))
+                stripMemoryCitations(stripNextResponsePrompt(stripUiTemplateContextInjection(parseCot(source.content || '').main)))
             )).filter(Boolean).join('\n\n');
         };
 
@@ -5203,6 +5295,7 @@ const app = createApp({
                         const sourceMemories = group.map(memory => cloneForStorage(memory));
                         const mergedMemory = markRuntimeRaw({
                             id: generateUUID(),
+                            no: getNextClassicMemoryNo(classicMemories.value),
                             timestamp: Date.now(),
                             turn: endTurn,
                             turnStart: startTurn,
@@ -5339,6 +5432,7 @@ const app = createApp({
                 if (currentCharacter.value?.uuid !== job.characterId || getCurrentStoryBranchScopeId() !== job.storyScopeId || hasClassicMemoryForJob(job)) return false;
                 classicMemories.value.push(markRuntimeRaw({
                     id: generateUUID(),
+                    no: getNextClassicMemoryNo(classicMemories.value),
                     timestamp: Date.now(),
                     turn: job.turn,
                     summary,
@@ -5505,7 +5599,7 @@ const app = createApp({
             if (!message || typeof message.content !== 'string') return '';
             const parsedData = parseCot(message.content || '');
             const cleanMain = stripUiTemplateContextInjection(parsedData.main || '');
-            return trimMemoryText(stripDisabledImageGenContext(stripNextResponsePrompt(stripUiTemplateUpdateBlock(cleanMain))), 5000);
+            return trimMemoryText(stripMemoryCitations(stripDisabledImageGenContext(stripNextResponsePrompt(stripUiTemplateUpdateBlock(cleanMain)))), 5000);
         };
 
         const buildKeywordToolSnippet = (text, matchedTerms) => {
@@ -5745,8 +5839,8 @@ const app = createApp({
             return size;
         };
 
-        const generateRandomNumberForTool = (min, max) => {
-            const size = getRandomToolRangeSize(min, max);
+        const generateRandomResultForTool = ({ min, max, choices }) => {
+            const size = choices ? choices.length : getRandomToolRangeSize(min, max);
             // 丢弃不能均分到范围内的尾部，避免取余后某些数字更容易出现。
             const sampleSpace = 2 ** 53;
             const limit = sampleSpace - (sampleSpace % size);
@@ -5756,7 +5850,9 @@ const app = createApp({
                 crypto.getRandomValues(words);
                 sample = (words[0] & 0x1fffff) * 2 ** 32 + words[1];
             } while (sample >= limit);
-            return { min, max, value: min + sample % size };
+            return choices
+                ? { choices, value: choices[sample % size] }
+                : { min, max, value: min + sample % size };
         };
 
         const parseNativeActiveToolCall = (call, tools) => {
@@ -5770,11 +5866,24 @@ const app = createApp({
                     throw new Error('工具参数必须为 JSON 对象，reason 为可选字符串');
                 }
                 if (tool.type === ACTIVE_TOOL_RANDOM_TYPE) {
-                    if (Object.keys(args).some(key => !['min', 'max', 'reason'].includes(key))) {
-                        throw new Error('随机数工具仅接受 min、max 和可选的 reason');
+                    if (Object.keys(args).some(key => !['min', 'max', 'choices', 'reason'].includes(key))) {
+                        throw new Error('随机生成仅接受 min、max 或 choices，以及可选的 reason');
                     }
-                    getRandomToolRangeSize(args.min, args.max);
-                    Object.assign(parsed, { min: args.min, max: args.max, query: `${args.min} ～ ${args.max}`, reason: (args.reason || '').trim() });
+                    if (args.choices !== undefined) {
+                        if (args.min !== undefined || args.max !== undefined) {
+                            throw new Error('choices 与 min、max 只能选择一种方式');
+                        }
+                        if (!Array.isArray(args.choices) || !args.choices.length
+                            || args.choices.some(item => typeof item !== 'string' || !item.trim())) {
+                            throw new Error('choices 必须是至少包含一个非空名称的数组');
+                        }
+                        parsed.choices = [...new Set(args.choices.map(item => item.trim()))];
+                        parsed.query = parsed.choices.join('、');
+                    } else {
+                        getRandomToolRangeSize(args.min, args.max);
+                        Object.assign(parsed, { min: args.min, max: args.max, query: `${args.min} ～ ${args.max}` });
+                    }
+                    parsed.reason = (args.reason || '').trim();
                 } else {
                     if (Object.keys(args).some(key => !['query', 'reason'].includes(key))
                         || typeof args.query !== 'string' || !args.query.trim()) {
@@ -5856,7 +5965,7 @@ const app = createApp({
             const groupKey = getActiveToolUiGroupKey(toolCall);
             if (groupKey === ACTIVE_TOOL_WEB_TYPE) return 'Tavily 联网搜索';
             if (groupKey === ACTIVE_TOOL_KEYWORD_TYPE) return '关键词检索';
-            if (groupKey === ACTIVE_TOOL_RANDOM_TYPE) return '随机数生成';
+            if (groupKey === ACTIVE_TOOL_RANDOM_TYPE) return '随机生成';
             return toolCall?.name || '工具调用';
         };
 
@@ -5872,7 +5981,7 @@ const app = createApp({
             if (groupKey === ACTIVE_TOOL_KEYWORD_TYPE) {
                 return '关键词检索';
             }
-            if (groupKey === ACTIVE_TOOL_RANDOM_TYPE) return '生成随机数';
+            if (groupKey === ACTIVE_TOOL_RANDOM_TYPE) return '随机生成';
             return '工具调用';
         };
 
@@ -6044,7 +6153,7 @@ const app = createApp({
                         toolUi.status = 'running';
                         const isRandom = toolCall.tool.type === ACTIVE_TOOL_RANDOM_TYPE;
                         const results = isRandom
-                            ? [generateRandomNumberForTool(toolCall.min, toolCall.max)]
+                            ? [generateRandomResultForTool(toolCall)]
                             : isWebActiveTool(toolCall.tool)
                                 ? await searchWebByTavilyForTool(toolCall.query, toolCall.tool, toolAbort.signal)
                                 : searchDialogueByKeywordForTool(toolCall.query, toolCall.tool.resultCount, { excludeMessageId: assistantMessage.id });
@@ -7105,7 +7214,7 @@ const app = createApp({
                 _isApplyingCharacterScopedData = true;
                 resetChatRenderWindow();
                 chatHistory.value = sourceChatHistory;
-                classicMemories.value = prepareClassicMemoriesForRuntime(branchClassicMemories);
+                classicMemories.value = numberClassicMemories(prepareClassicMemoriesForRuntime(branchClassicMemories));
                 _classicMemoriesLoaded = true;
                 clearStoryBranchTransientContext();
                 finishApplyingCharacterScopedData();
@@ -7158,7 +7267,7 @@ const app = createApp({
                 activeStoryBranchId.value = branchId;
                 resetChatRenderWindow();
                 chatHistory.value = loadedChatHistory;
-                classicMemories.value = prepareClassicMemoriesForRuntime(savedClassicMemories);
+                classicMemories.value = numberClassicMemories(prepareClassicMemoriesForRuntime(savedClassicMemories));
                 _classicMemoriesLoaded = true;
                 loadGlobalUiTemplateRuntimeForCharacter(char);
                 clearStoryBranchTransientContext();
@@ -7196,7 +7305,7 @@ const app = createApp({
             let summaryLoaded = false;
             try {
                 const savedMemories = await getScopedStoredValue('classic_memories', characterId);
-                summaryMemories = prepareClassicMemoriesForRuntime(savedMemories);
+                summaryMemories = numberClassicMemories(prepareClassicMemoriesForRuntime(savedMemories));
                 summaryLoaded = true;
             } catch (error) {
                 console.error(`Error loading classic memories${errorContext}:`, error);
@@ -8171,6 +8280,37 @@ const app = createApp({
         });
         const memoryStats = computed(() => ({ activeTotal: classicMemories.value.length }));
 
+        // 点正文里的记忆引用，查看 AI 当时依据的总结记忆；按编号在当前分支的记忆（含已合并的原始总结）里查找。
+        const memoryCitationNos = ref([]);
+        const memoryCitationItems = computed(() => {
+            if (!memoryCitationNos.value.length) return [];
+            const byNo = new Map(flattenClassicMemories(classicMemories.value).map(memory => [memory.no, memory]));
+            return memoryCitationNos.value.map(no => {
+                const memory = byNo.get(no);
+                if (!memory) return { no, missing: true };
+                return {
+                    no,
+                    turnLabel: `第 ${memoryCitationLabels.value.get(no)} 轮`,
+                    summary: memory.summary
+                };
+            });
+        });
+        const showMemoryCitation = (nos) => {
+            const numbers = [...new Set(String(nos || '').split(',').map(Number).filter(no => Number.isInteger(no) && no > 0))];
+            if (numbers.length) memoryCitationNos.value = numbers;
+        };
+        const openMemoryCitation = (event) => showMemoryCitation(event.target.closest?.('.memory-cite, .memory-cite-text')?.dataset.memoryNos);
+        // HTML 卡片在 iframe 里渲染，卡片脚本借这里的处理给引用加角标，点击后在这里打开判断依据。
+        window.RPHubMemoryCitations = {
+            decorate: decorateMemoryCitations,
+            open: showMemoryCitation,
+            frameStyle: () => {
+                const tone = getComputedStyle(document.documentElement).getPropertyValue('--primary-500').trim() || '99 102 241';
+                return `.memory-cite-text{text-decoration:underline dotted rgb(${tone} / .75);text-decoration-thickness:1.5px;text-underline-offset:.3em;cursor:pointer}`
+                    + `.memory-cite{display:inline-flex;align-items:center;justify-content:center;min-width:1.4em;height:1.4em;margin:0 .15em;padding:0 .35em;border:0;border-radius:999px;background:rgb(${tone} / .14);color:rgb(${tone});font:700 .75em/1 system-ui,sans-serif;vertical-align:.4em;cursor:pointer}`;
+            }
+        };
+
         const applyPersonPresetSelection = (person) => {
             user.person = person === 'third' ? 'third' : 'second';
             const secondPersonPreset = presets.value.find(preset => preset.name === '第二人称');
@@ -8186,7 +8326,7 @@ const app = createApp({
             showActiveToolEditor,
             showExportModal, exportItems, selectedExportIndices, // Export Modal
             showContextViewerModal, lastContextMessages, lastTriggeredWorldInfos,
-            lastContextTotalLength, lastContextFloorCount, // Context Viewer
+            lastContextTotalLength, // Context Viewer
             showStoryBranchModal, showStoryBranchNameEditor, storyBranchNameDraft,
             storyBranches, storyRouteMap, currentStoryBranch, selectedStoryRouteNode,
             selectedStoryBranchId, storyBranchSwitching, storyRouteMapDragging,
@@ -8198,14 +8338,14 @@ const app = createApp({
             tokenUsageHistory, tokenUsagePage, tokenUsagePageCount, tokenUsageFilter, tokenUsageTimeFilter,
             showTokenUsageTimeFilter, tokenUsageTimeFilterOptions, tokenUsageTimeFilterLabel,
             filteredTokenUsageHistory, tokenUsageStats, displayedTokenUsageHistory,
-            latestMainTokenUsage, formatLatestTokenCount, formatLatestUsageCost,
-            getUncachedInputTokens, formatTokenCount, formatTokenAggregate, formatTokenUsageTime, getTokenUsageTypeLabel, clearTokenUsageHistory,
+            latestMainTokenUsage, formatLatestTokenCount,
+            getUncachedInputTokens, formatTokenCount, formatTokenAggregate, formatTokenUsageTime, getTokenUsageCategory, clearTokenUsageHistory,
             storageStats, refreshStorageStats, cleanupUnusedStorage, formatStorageSize,
             showCharacterExportModal, openCharacterExportModal, confirmCharacterExport, // Character Export Modal
             updateModalRef, latestUpdateConfig,
             showConfirmModal, confirmMessage, modelMode, isGeminiModel, isTruncationEnabled, isPresetEnabled, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, // Export for template
             isGenerating, isRemoteGenerating, remoteEstimatedTime, isReceiving, isThinking, hasActiveToolInlineWork, isConversationBusy, activeToolContinuationMessageId, activeToolContinuationHasResponse, userInput, pendingCardInteraction, clearPendingCardInteraction, pendingChatImages, pendingChatImageReadCount, isRecognizingImages, requestChatImageSelection, handleChatImageSelection, removePendingChatImage, modelSearchQuery, activeModelTag, modelTags, characterSearchQuery, filteredModels, filteredCharacters,
-            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontFamilyOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, getSortableItemKey, regexScripts, worldInfo,
+            user, settings, apiProviderOptions, selectedApiProvider, isCustomApiProvider, customApiProviderOptions, showApiProviderSelector, selectApiProvider, characters, currentCharacter, currentCharacterAvatar, currentCharacterIndex, switchingCharacterIndex, chatHistory, displayedChatMessages, handleChatScroll, presets, presetRoleOptions, fontSizeOptions, availableImageStyleOptions, imageModelOptions, imageSizeOptions, imageGenCountOptions, scopeOptions, uiTemplatePlacementOptions, worldInfoPositionOptions, getPresetRoleLabel, getPresetRoleDisplayLabel, getPresetRoleBadgeClass, getSortableItemKey, regexScripts, worldInfo,
             activeTools, activeToolAggressivenessOptions: ACTIVE_TOOL_AGGRESSIVENESS_OPTIONS, editingActiveTool, normalizeActiveTools, isWebActiveTool, getActiveToolDisplayDescription, getActiveToolResultCountMin, getActiveToolResultCountMax,
             getToolCallModeText, hasThinkingOrTools, isMessageThinkingOrRunning, isThinkingSummaryOpen, toggleThinkingSummary, markThinkingSummaryDetailOpened, getTimelineSteps,
             isStyleFilterDetailsOpen, toggleStyleFilterDetails, getStyleFilterHitSegments,
@@ -8231,7 +8371,7 @@ const app = createApp({
                 set: (val) => { settings.uiTemplateAnalysisDepth = Math.max(4, Math.min(10, Number(val) || 4)); }
             }),
             displayedClassicMemories,
-            memoryStats,
+            memoryStats, memoryCitationNos, memoryCitationItems, openMemoryCitation,
             clearAllMemories: () => {
                 confirmAction('确定要清空所有总结记忆及其向量吗？两个模式共享这些记忆，此操作无法撤销。', async () => {
                     abortClassicBatchExtraction();
@@ -8312,6 +8452,7 @@ const app = createApp({
                 showExportModal.value = false;
                 showToast(`成功导出 ${items.length} 个项目`, 'success');
             },
+
             importPresets: (event) => readJsonFileInput(event, data => {
                 const items = Array.isArray(data) ? data : [data];
                 if (items.length > 0) {
