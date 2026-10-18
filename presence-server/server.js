@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { handleAdminRequest, handleBackupRequest, initBackup } from './backup.js';
+import { flushBackupStats, handleAdminRequest, handleBackupRequest, initBackup } from './backup.js';
 
 const port = Number(process.env.PORT) || 3000;
 const parseVersionId = value => /^\d{5}$/.test(String(value ?? '').trim())
@@ -132,7 +132,7 @@ server.listen(port, '0.0.0.0', () => {
     console.log(`RP-Hub update check service listening on ${port}`);
 });
 
-const shutdown = () => server.close(() => process.exit(0));
+const shutdown = () => flushBackupStats().then(() => server.close(() => process.exit(0)));
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 

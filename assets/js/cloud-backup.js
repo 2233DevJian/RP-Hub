@@ -96,7 +96,8 @@
         return owners;
     };
 
-    const createBackup = async (onProgress) => {
+    // `replaces` is this device's previous key, which the server retires once the new backup exists.
+    const createBackup = async (onProgress, replaces) => {
         const { getScopedStoredValue, getStoredValue } = storage();
         const characters = ((await getStoredValue('characters')) || []).filter(character => character?.uuid);
         if (!characters.length) throw new Error('还没有角色卡可以备份');
@@ -161,7 +162,7 @@
             report();
         }
         onProgress({ label: '正在生成密钥', percent: 100, detail: '' });
-        return { ...await postJson('/v1/backup', { characters: manifest }), total: pieces.length, skipped };
+        return { ...await postJson('/v1/backup', { characters: manifest, replaces }), total: pieces.length, skipped };
     };
 
     // Look-alike letters are read as the digits they resemble, as the server does.
@@ -299,12 +300,13 @@
         const startCloudBackup = () => run(async () => {
             setProgress({ label: '正在保存当前数据', percent: 0, detail: '' });
             await saveAll();
-            const { key, expiresAt, total, skipped } = await createBackup(setProgress);
+            const { key, expiresAt, total, skipped, replaced } = await createBackup(setProgress, cloudBackup.key || undefined);
             Object.assign(cloudBackup, { key, expiresAt });
             try {
                 localStorage.setItem(LAST_BACKUP_STORAGE_KEY, JSON.stringify({ key, expiresAt }));
             } catch (_) { /* The key is still shown in the dialog. */ }
-            toast(skipped ? `备份完成：共 ${total} 项，其中 ${skipped} 项云端已有，已跳过` : `备份完成：共 ${total} 项`, 'success');
+            const summary = skipped ? `备份完成：共 ${total} 项，其中 ${skipped} 项云端已有，已跳过` : `备份完成：共 ${total} 项`;
+            toast(replaced ? `${summary}；旧密钥已作废` : summary, 'success');
         });
 
         const readCloudBackup = () => run(async () => {

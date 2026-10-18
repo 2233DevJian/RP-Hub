@@ -2511,6 +2511,7 @@
                     <ul class="mt-4 space-y-1.5 pl-4 list-disc text-[13px] leading-relaxed text-gray-500">
                         <li>上传后得到一个密钥，15 天内在其他设备点“下载备份”输入即可恢复</li>
                         <li>单次最多 500MB，云端已有的相同内容会自动跳过</li>
+                        <li>重新上传会生成新密钥，这台设备上一次的密钥随即作废</li>
                         <li>密钥相当于取件码，拿到的人都能下载这份备份，请勿外传</li>
                     </ul>
                     <div v-if="cloudBackup.key && !cloudBackup.progress" class="mt-5 rounded-xl border border-gray-200 bg-gray-50 px-4 py-4 text-center">

@@ -45,7 +45,7 @@ const blobPath = hash => path.join(BLOB_DIR, hash.slice(0, 2), `${hash}.gz`);
 // Look-alike letters are read as the digits they resemble, so a key typed by hand still works.
 const normalizeKey = key => String(key || '').toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
 const manifestPath = key => path.join(MANIFEST_DIR, `${sha256(key)}.json`);
-const manifestHashes = manifest => manifest.characters.flatMap(item => [item.hash, ...item.entries.map(entry => entry.hash)]);
+const manifestHashes = manifest => (manifest.characters || []).flatMap(item => [item.hash, ...item.entries.map(entry => entry.hash)]);
 
 const getClientIp = request => String(request.headers['x-forwarded-for'] || '').split(',')[0].trim()
     || request.socket.remoteAddress || '';
@@ -160,9 +160,26 @@ const receiveBlob = async (request, hash, ip) => {
 const isText = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
 const isPiece = item => HASH_RE.test(item?.hash) && Number.isInteger(item.size) && item.size >= 0;
 
+// A new upload from the same device retires the backup before it. Only the old list goes, replaced by a marker that
+// lets the old key explain itself until it would have expired; pieces the new backup or anyone else's still uses stay,
+// and the hourly cleanup removes the rest.
+const retireManifest = async (rawKey, now) => {
+    const key = normalizeKey(rawKey);
+    if (key.length !== 16) return false;
+    const file = manifestPath(key);
+    const old = JSON.parse(await fsp.readFile(file, 'utf8').catch(() => 'null'));
+    if (!old || old.replacedAt || old.expiresAt <= now) return false;
+    const tmp = path.join(TMP_DIR, `manifest-${crypto.randomUUID()}`);
+    await fsp.writeFile(tmp, JSON.stringify({ createdAt: old.createdAt, expiresAt: old.expiresAt, replacedAt: now }));
+    await fsp.rename(tmp, file);
+    manifestCache.delete(file);
+    count({ replaced: 1 });
+    return true;
+};
+
 const createBackup = async (request, ip) => {
     if (overLimit('create', ip, 20, HOUR)) throw httpError(429, '备份太频繁，请稍后再试');
-    const { characters } = await readJsonBody(request, 16 * MB);
+    const { characters, replaces } = await readJsonBody(request, 16 * MB);
     const valid = Array.isArray(characters) && characters.length > 0 && characters.length <= 5000
         && characters.every(item => isText(item?.uuid, 100) && typeof item.name === 'string' && item.name.length <= 200
             && isPiece(item) && Array.isArray(item.entries) && item.entries.length <= 2000
@@ -199,7 +216,8 @@ const createBackup = async (request, ip) => {
     await fsp.writeFile(tmp, JSON.stringify(manifest));
     await fsp.rename(tmp, manifestPath(key));
     count({ backups: 1, backupBytes });
-    return { key: key.match(/.{4}/g).join('-'), expiresAt: manifest.expiresAt };
+    const replaced = await retireManifest(replaces, now);
+    return { key: key.match(/.{4}/g).join('-'), expiresAt: manifest.expiresAt, replaced };
 };
 
 const loadManifest = async (rawKey, ip) => {
@@ -211,6 +229,7 @@ const loadManifest = async (rawKey, ip) => {
         if (key.length !== 16 || [...key].some(char => !KEY_ALPHABET.includes(char))) throw httpError(404, '密钥无效或已过期');
         manifest = JSON.parse(await fsp.readFile(file, 'utf8').catch(() => 'null'));
         if (!manifest) throw httpError(404, '密钥无效或已过期');
+        if (manifest.replacedAt && manifest.expiresAt > Date.now()) throw httpError(410, '这份备份已被同一设备的新备份替换，请使用新的密钥');
         manifest.hashes = new Set(manifestHashes(manifest));
         if (manifestCache.size >= 50) manifestCache.delete(manifestCache.keys().next().value);
         manifestCache.set(file, manifest);
@@ -230,12 +249,14 @@ const collectGarbage = async () => {
             const file = path.join(MANIFEST_DIR, name);
             const manifest = JSON.parse(await fsp.readFile(file, 'utf8').catch(() => 'null'));
             if (manifest?.expiresAt > now) {
-                found.backups += 1;
-                manifest.characters.flatMap(item => [item, ...item.entries]).forEach((piece) => {
+                if (!manifest.replacedAt) found.backups += 1;
+                (manifest.characters || []).flatMap(item => [item, ...item.entries]).forEach((piece) => {
                     found.backupBytes += piece.size;
                     referenced.add(piece.hash);
                 });
             } else {
+                // A retired backup's marker was counted when it was replaced, so only real expiries count here.
+                if (manifest && !manifest.replacedAt) count({ expired: 1 });
                 await fsp.rm(file, { force: true });
             }
         }
@@ -247,6 +268,7 @@ const collectGarbage = async () => {
                 const { size, mtimeMs } = await fsp.stat(file);
                 if (!referenced.has(name.slice(0, 64)) && now - mtimeMs > ORPHAN_GRACE_MS) {
                     await fsp.rm(file, { force: true });
+                    count({ deletedPieces: 1, freedBytes: size });
                 } else {
                     total += size;
                     found.pieces += 1;
@@ -264,6 +286,9 @@ const collectGarbage = async () => {
         collecting = false;
     }
 };
+
+// Called on shutdown so a restart or redeploy keeps the last minute of counters.
+export const flushBackupStats = () => saveStats().catch(error => console.warn('Saving backup stats failed:', error.message));
 
 export const initBackup = async () => {
     try {
