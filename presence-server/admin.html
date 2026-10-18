@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex">
+    <title>RP-Hub 备份后台</title>
+    <style>
+        :root {
+            --bg: #f5f6f8; --card: #fff; --text: #1d2129; --muted: #6b7280; --line: #e7e9ee;
+            --accent: #4659e2; --accent-soft: #eceffd; --warn: #d97706; --danger: #dc2626;
+            color-scheme: light;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111317; --card: #1a1d23; --text: #e8eaef; --muted: #a0a6b2; --line: #2a2e36;
+                --accent: #7b8cff; --accent-soft: #252a45; --warn: #f59e0b; --danger: #f87171;
+                color-scheme: dark;
+            }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+        [hidden] { display: none !important; }
+        .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+        header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+        h1 { margin: 0; font-size: 20px; }
+        h2 { margin: 28px 0 10px; font-size: 15px; }
+        .sub { color: var(--muted); font-size: 12px; }
+        .actions { display: flex; gap: 8px; }
+        button { padding: 7px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+        button:hover { border-color: var(--muted); }
+        button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+        button:disabled { opacity: 0.5; cursor: default; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+        .card { padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+        .label { color: var(--muted); font-size: 12px; font-weight: 600; }
+        .big { margin-top: 4px; font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .line { margin-top: 2px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+        .bar { height: 8px; margin: 10px 0 6px; overflow: hidden; border-radius: 99px; background: var(--accent-soft); }
+        .bar > i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+        .bar.warn > i { background: var(--warn); }
+        .bar.danger > i { background: var(--danger); }
+        .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+        table { width: 100%; border-collapse: collapse; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        th, td { padding: 10px 14px; border-bottom: 1px solid var(--line); text-align: right; }
+        th:first-child, td:first-child { text-align: left; }
+        th { color: var(--muted); font-size: 12px; font-weight: 600; }
+        tr:last-child td { border-bottom: 0; }
+        .empty { padding: 28px; color: var(--muted); text-align: center; }
+        .login { max-width: 360px; margin: 14vh auto 0; }
+        .login input { width: 100%; margin: 14px 0 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+        .login button { width: 100%; margin-top: 8px; padding: 10px; }
+        .error { min-height: 20px; color: var(--danger); font-size: 13px; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <form id="login" class="login card" hidden>
+            <h1>RP-Hub 备份后台</h1>
+            <div class="sub">输入环境变量 ADMIN_PASSWORD 里设置的密码</div>
+            <input id="password" type="password" autocomplete="current-password" placeholder="管理员密码" required>
+            <div id="login-error" class="error"></div>
+            <button class="primary" type="submit">登录</button>
+        </form>
+
+        <main id="dashboard" hidden>
+            <header>
+                <div>
+                    <h1>RP-Hub 备份后台</h1>
+                    <div id="updated" class="sub"></div>
+                </div>
+                <div class="actions">
+                    <button id="refresh" type="button">刷新</button>
+                    <button id="logout" type="button">退出</button>
+                </div>
+            </header>
+            <div id="overview" class="grid"></div>
+            <h2>存储概况</h2>
+            <div id="storage" class="grid"></div>
+            <h2>每日明细（北京时间）</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>日期</th><th>新建备份</th><th>上传项数</th><th>上传流量</th>
+                            <th>读取备份</th><th>下载项数</th><th>下载流量</th><th>查重命中率</th>
+                        </tr>
+                    </thead>
+                    <tbody id="days"></tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+        const SESSION_KEY = 'rphub-admin-password';
+        let password = sessionStorage.getItem(SESSION_KEY) || '';
+
+        const formatBytes = (value) => {
+            let size = Number(value) || 0;
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let unit = 0;
+            while (size >= 1024 && unit < units.length - 1) {
+                size /= 1024;
+                unit += 1;
+            }
+            return `${unit ? size.toFixed(size >= 100 ? 0 : 1) : size} ${units[unit]}`;
+        };
+        const formatCount = value => (Number(value) || 0).toLocaleString('zh-CN');
+        const formatRate = (part, whole) => (whole ? `${(part / whole * 100).toFixed(1)}%` : '—');
+        const card = (label, big, lines, extra = '') => `<div class="card"><div class="label">${label}</div>`
+            + `<div class="big">${big}</div>${extra}${lines.map(line => `<div class="line">${line}</div>`).join('')}</div>`;
+
+        const showDashboard = (visible) => {
+            $('login').hidden = visible;
+            $('dashboard').hidden = !visible;
+        };
+
+        const render = ({ storage, live, retentionDays, days }) => {
+            const today = days[new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10)] || {};
+            const total = Object.values(days).reduce((sum, day) => {
+                Object.entries(day).forEach(([field, amount]) => { sum[field] = (sum[field] || 0) + amount; });
+                return sum;
+            }, {});
+            // Backups can grow until the configured limit or until the disk is full, whichever comes first.
+            const room = Math.min(storage.limit, storage.used + storage.diskFree);
+            const ratio = room ? storage.used / room : 0;
+            const barClass = ratio > 0.9 ? 'bar danger' : ratio > 0.75 ? 'bar warn' : 'bar';
+
+            $('overview').innerHTML = [
+                card('可用空间', formatBytes(Math.max(0, room - storage.used)), [
+                    `备份已用 ${formatBytes(storage.used)} / 上限 ${formatBytes(storage.limit)}`,
+                    `硬盘剩余 ${formatBytes(storage.diskFree)} / 共 ${formatBytes(storage.diskTotal)}`
+                ], `<div class="${barClass}"><i style="width:${(ratio * 100).toFixed(1)}%"></i></div>`),
+                card('查重命中率', formatRate(total.hits, total.checked), [
+                    `今日 ${formatRate(today.hits, today.checked)}（${formatCount(today.hits)} / ${formatCount(today.checked)} 项）`,
+                    `近 90 天命中 ${formatCount(total.hits)} / 检查 ${formatCount(total.checked)} 项`,
+                    '命中 = 云端已有，跳过上传'
+                ]),
+                card('今日上传', `${formatCount(today.backups)} 份备份`, [
+                    `上传 ${formatCount(today.uploads)} 项，${formatBytes(today.uploadBytes)}`,
+                    `近 90 天 ${formatCount(total.backups)} 份，${formatBytes(total.uploadBytes)}`
+                ]),
+                card('今日下载', `${formatCount(today.restores)} 次读取`, [
+                    `下载 ${formatCount(today.downloads)} 项，${formatBytes(today.downloadBytes)}`,
+                    `近 90 天 ${formatCount(total.restores)} 次，${formatBytes(total.downloadBytes)}`
+                ])
+            ].join('');
+
+            $('storage').innerHTML = [
+                card('有效备份', `${formatCount(live.backups)} 份`, [`每份保存 ${retentionDays} 天，过期自动清理`]),
+                card('存储内容', `${formatCount(live.pieces)} 份`, ['每张角色卡、每份聊天各算一份，相同的只存一次']),
+                card('去重与压缩节省', formatRate(Math.max(0, live.backupBytes - storage.used), live.backupBytes), [
+                    `备份原始大小 ${formatBytes(live.backupBytes)}，实际占用 ${formatBytes(storage.used)}`
+                ])
+            ].join('');
+
+            const rows = Object.keys(days).sort().reverse().slice(0, 30).map((date) => {
+                const day = days[date];
+                return `<tr><td>${date}</td><td>${formatCount(day.backups)}</td><td>${formatCount(day.uploads)}</td>`
+                    + `<td>${formatBytes(day.uploadBytes)}</td><td>${formatCount(day.restores)}</td><td>${formatCount(day.downloads)}</td>`
+                    + `<td>${formatBytes(day.downloadBytes)}</td><td>${formatRate(day.hits, day.checked)}</td></tr>`;
+            });
+            $('days').innerHTML = rows.join('') || '<tr><td colspan="8" class="empty">还没有记录</td></tr>';
+            $('updated').textContent = `更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
+        };
+
+        // A refused password goes back to the login form; other failures show where the user is looking.
+        const fail = (message, signOut = false) => {
+            if (signOut) sessionStorage.removeItem(SESSION_KEY);
+            if (signOut || $('dashboard').hidden) {
+                showDashboard(false);
+                $('login-error').textContent = message;
+            } else {
+                $('updated').textContent = message;
+            }
+        };
+
+        const load = async () => {
+            $('refresh').disabled = true;
+            try {
+                const response = await fetch('/v1/admin/stats', { headers: { Authorization: `Bearer ${password}` }, cache: 'no-store' });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) return fail(data.error || `加载失败（${response.status}）`, [401, 429, 503].includes(response.status));
+                sessionStorage.setItem(SESSION_KEY, password);
+                $('login-error').textContent = '';
+                render(data);
+                showDashboard(true);
+            } catch (_) {
+                fail('连不上服务，请稍后再试');
+            } finally {
+                $('refresh').disabled = false;
+            }
+        };
+
+        $('login').addEventListener('submit', (event) => {
+            event.preventDefault();
+            password = $('password').value;
+            load();
+        });
+        $('refresh').addEventListener('click', load);
+        $('logout').addEventListener('click', () => {
+            sessionStorage.removeItem(SESSION_KEY);
+            password = '';
+            $('password').value = '';
+            showDashboard(false);
+        });
+        // Refreshes itself every minute while the tab is visible.
+        setInterval(() => { if (password && !document.hidden && !$('dashboard').hidden) load(); }, 60_000);
+
+        if (password) load();
+        else showDashboard(false);
+    </script>
+</body>
+</html>

@@ -31,6 +31,7 @@ npm start
 - `ALLOWED_ORIGINS`：允许访问接口的网站来源；未设置时允许所有来源。
 - `PORT`：监听端口，默认 `3000`。
 - `BACKUP_DIR`：云端备份存放目录。Dockerfile 里设为 `/data`；本地直接运行时默认是当前目录下的 `backup-data`。目录无法写入时，服务照常检测版本，备份接口返回“云端备份暂未开启”。
+- `ADMIN_PASSWORD`：后台密码。设置后打开服务域名下的 `/admin`，可以看到每天的上传和下载量、查重命中率（上传前检查的内容里云端已有、跳过上传的比例）、可用空间和去重节省的空间。不设置则后台不可用。
 - `BACKUP_MAX_TOTAL_GB`：备份最多占用的硬盘空间，默认 `1000`。达到上限或硬盘剩余不足 1GB 时，新上传会提示“云端空间暂时已满”。
 
 来源需要包含协议和端口（如 `http://127.0.0.1:8765`），不是带路径的完整页面 URL。CORS 限制不是身份验证，不能替代服务端访问控制。
@@ -46,6 +47,7 @@ npm start
 - `PUT /v1/backup/blobs/:sha256`：上传一份内容（gzip 压缩或原文，用 `X-Blob-Encoding` 标明），服务校验 SHA-256 后保存。
 - `POST /v1/backup`：提交备份清单，返回密钥和到期时间。
 - `GET /v1/backup/:key`：读取备份清单；`GET /v1/backup/:key/blobs/:sha256`：下载清单里的一份内容。
+- `GET /admin`：后台页面；`GET /v1/admin/stats`：后台数据，需要 `Authorization: Bearer <ADMIN_PASSWORD>`。统计按北京时间分日，保存在备份目录的 `stats.json`，保留 90 天。
 
 上传、建备份和查密钥都按 IP 限制频率。服务不生成浏览器编号，也不接收设置、总结记忆或 API 密钥。
 

@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { handleBackupRequest, initBackup } from './backup.js';
+import { handleAdminRequest, handleBackupRequest, initBackup } from './backup.js';
 
 const port = Number(process.env.PORT) || 3000;
 const parseVersionId = value => /^\d{5}$/.test(String(value ?? '').trim())
@@ -108,6 +108,10 @@ const server = http.createServer(async (request, response) => {
         } catch {
             return sendJson(response, 400, { error: 'Invalid request' }, corsOrigin);
         }
+    }
+
+    if (url.pathname === '/admin' || url.pathname.startsWith('/v1/admin/')) {
+        return handleAdminRequest(request, response, url, (status, body) => sendJson(response, status, body, corsOrigin));
     }
 
     if (url.pathname.startsWith('/v1/backup')) {
