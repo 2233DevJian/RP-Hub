@@ -760,13 +760,13 @@ ${closingInstruction}
 
 // --- Update announcement (keep this section at the bottom) ---
 window.RPHubLatestUpdate = Object.freeze({
-    id: 10222,
+    id: 10223,
     title: '网站公告',
     content: `
-### RP-Hub 2.0.3
+### RP-Hub 2.0.4
 
-- 新增“输入混淆”，解决英文输入审查，无注意力与智商损耗（Gemini模型）
+- 支持一键云端备份与跨设备下载/恢复
 
-#### 更新时间：10/16/01:49
+#### 更新时间：10/18/16:23
     `
 });
