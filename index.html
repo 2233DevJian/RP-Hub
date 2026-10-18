@@ -2500,7 +2500,7 @@
                 <div class="choice-modal__head">
                     <div>
                         <h3>{{ cloudBackup.mode === 'upload' ? '上传备份' : '下载备份' }}</h3>
-                        <p>{{ cloudBackup.mode === 'upload' ? '全部角色卡和对应的聊天记录（含分支，不含总结记忆）' : '输入其他设备上传时得到的密钥，把角色卡和聊天合并到本机' }}</p>
+                        <p>{{ cloudBackup.mode === 'upload' ? '全部角色卡和对应的聊天记录' : '输入上传时得到的密钥，把角色卡和聊天合并到本机' }}</p>
                     </div>
                     <button type="button" @click="closeCloudBackup" :disabled="cloudBackup.busy" class="modal-close-button disabled:opacity-40" aria-label="关闭">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
@@ -2509,7 +2509,7 @@
 
                 <template v-if="cloudBackup.mode === 'upload'">
                     <ul class="mt-4 space-y-1.5 pl-4 list-disc text-[13px] leading-relaxed text-gray-500">
-                        <li>上传后得到一个密钥，72 小时内在其他设备点“下载备份”输入即可恢复</li>
+                        <li>上传后得到一个密钥，15 天内在其他设备点“下载备份”输入即可恢复</li>
                         <li>单次最多 500MB，云端已有的相同内容会自动跳过</li>
                         <li>密钥相当于取件码，拿到的人都能下载这份备份，请勿外传</li>
                     </ul>

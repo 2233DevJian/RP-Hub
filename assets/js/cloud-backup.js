@@ -1,6 +1,6 @@
 // Cloud backup: characters and all their chats (branches included, summaries not) go to the update service as
 // pieces named by the SHA-256 of their JSON, so whatever the server already holds is skipped. The key it returns
-// merges them into another device or browser within 72 hours. The service is the one in `rphub-update-api`.
+// merges them into another device or browser within 15 days. The service is the one in `rphub-update-api`.
 (function () {
     const { markRaw, reactive } = Vue;
     const apiUrl = String(document.querySelector('meta[name="rphub-update-api"]')?.content || '')

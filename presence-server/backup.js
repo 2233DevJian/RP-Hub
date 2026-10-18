@@ -1,6 +1,6 @@
 // Cloud backup of RP-Hub characters and their chats. Each character and each chat is stored once, by the SHA-256 of
 // its JSON, so anything the disk already holds (from any earlier backup) is skipped. A backup is a manifest of those
-// hashes that a 16-character key opens for 72 hours. Nothing is encrypted: the key works like a pickup code.
+// hashes that a 16-character key opens for 15 days. Nothing is encrypted: the key works like a pickup code.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -18,7 +18,7 @@ const TMP_DIR = path.join(BACKUP_DIR, 'tmp');
 const MAX_BACKUP_BYTES = 500 * MB;
 const MAX_TOTAL_BYTES = (Number(process.env.BACKUP_MAX_TOTAL_GB) || 1000) * 1024 * MB;
 const FREE_SPACE_RESERVE = 1024 * MB;
-const RETENTION_MS = 72 * HOUR;
+const RETENTION_MS = 15 * 24 * HOUR;
 // Pieces uploaded for a backup that was never finished are kept this long before they count as rubbish.
 const ORPHAN_GRACE_MS = 6 * HOUR;
 const KEY_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
