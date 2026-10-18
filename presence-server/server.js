@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { handleBackupRequest, initBackup } from './backup.js';
 
 const port = Number(process.env.PORT) || 3000;
 const parseVersionId = value => /^\d{5}$/.test(String(value ?? '').trim())
@@ -72,8 +73,8 @@ const server = http.createServer(async (request, response) => {
         if (origin && !corsOrigin) return sendJson(response, 403, { error: 'Origin not allowed' });
         response.writeHead(204, {
             'Access-Control-Allow-Origin': corsOrigin || '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, X-Blob-Encoding',
             'Access-Control-Max-Age': '86400',
             Vary: 'Origin'
         });
@@ -109,10 +110,19 @@ const server = http.createServer(async (request, response) => {
         }
     }
 
+    if (url.pathname.startsWith('/v1/backup')) {
+        return handleBackupRequest(request, response, url, (status, body) => sendJson(response, status, body, corsOrigin),
+            corsOrigin ? { 'Access-Control-Allow-Origin': corsOrigin, Vary: 'Origin' } : {});
+    }
+
     return sendJson(response, 404, { error: 'Not found' }, corsOrigin);
 });
 
+// A large backup piece on a slow phone connection can take longer than Node's default five minutes.
+server.requestTimeout = 30 * 60_000;
+
 refreshLatestVersionId();
+initBackup();
 
 server.listen(port, '0.0.0.0', () => {
     console.log(`RP-Hub update check service listening on ${port}`);

@@ -1,5 +1,5 @@
 const { createApp, ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } = Vue;
-const { useStorageManagement, useTokenUsage } = window.RPHubComposables;
+const { useTokenUsage } = window.RPHubComposables;
 const { createMessageRenderer } = window.RPHubMessageRenderer;
 const { AppNavigation } = window.RPHubLayoutComponents;
 const { requestChatCompletion, requestJson } = window.RPHubApiClient;
@@ -109,7 +109,6 @@ const {
 const {
     cloneForStorage,
     deleteScopedStoredValue,
-    deleteStorageKeys,
     deleteStoredValue,
     getLegacyDb,
     getMainDb,
@@ -119,7 +118,6 @@ const {
     initDB,
     isDatabaseClosingError,
     readStorageKeys,
-    scanStorageEntries,
     setScopedStoredValue,
     setStoredValue,
     unwrapForStorage
@@ -1398,26 +1396,16 @@ const app = createApp({
             }) });
         };
         const {
-            cleanupUnusedStorage,
-            formatStorageSize,
-            refreshStorageStats,
-            storageStats
-        } = useStorageManagement({
-            characters,
-            confirm: (...args) => confirmAction(...args),
-            deleteStorageKeys,
-            ensureStorage: async () => {
-                if (!getMainDb()) await initDB();
-            },
-            getBranchOwnerId: scopeId => getStoryBranchOwnerId(scopeId),
-            getLegacyDb,
-            getMainDb,
-            getStorageLogicalKey,
-            globalUiTemplates,
-            readStorageKeys,
-            saveStoredValue: setStoredValue,
-            scanStorageEntries,
-            scopedStorageNames: CHARACTER_SCOPED_STORAGE_NAMES,
+            cloudBackup,
+            closeCloudBackup,
+            copyCloudBackupKey,
+            formatCloudBackupTime,
+            openCloudBackup,
+            readCloudBackup,
+            startCloudBackup,
+            startCloudRestore
+        } = window.RPHubCloudBackup.useCloudBackup({
+            saveAll: () => saveData(),
             toast: (...args) => showToast(...args)
         });
         // Export Modal State
@@ -8340,7 +8328,7 @@ const app = createApp({
             filteredTokenUsageHistory, tokenUsageStats, displayedTokenUsageHistory,
             latestMainTokenUsage, formatLatestTokenCount,
             getUncachedInputTokens, formatTokenCount, formatTokenAggregate, formatTokenUsageTime, getTokenUsageCategory, clearTokenUsageHistory,
-            storageStats, refreshStorageStats, cleanupUnusedStorage, formatStorageSize,
+            cloudBackup, openCloudBackup, closeCloudBackup, startCloudBackup, readCloudBackup, startCloudRestore, copyCloudBackupKey, formatCloudBackupTime,
             showCharacterExportModal, openCharacterExportModal, confirmCharacterExport, // Character Export Modal
             updateModalRef, latestUpdateConfig,
             showConfirmModal, confirmMessage, modelMode, isGeminiModel, isTruncationEnabled, isPresetEnabled, chatModelSlots, selectChatModelSlot, reasoningEffortSlider, reasoningEffortLabel, // Export for template
