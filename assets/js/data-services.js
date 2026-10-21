@@ -62,7 +62,7 @@
 
     const unwrapForStorage = (value, seen = new WeakMap()) => {
         if (value === null || typeof value !== 'object') return value;
-        const raw = typeof Vue?.toRaw === 'function' ? Vue.toRaw(value) : value;
+        const raw = Vue.toRaw(value);
         if (raw === null || typeof raw !== 'object') return raw;
         if (seen.has(raw)) return seen.get(raw);
         if (raw instanceof Date) return raw.toISOString();
@@ -102,8 +102,7 @@
     const scopedStorageKey = (name, id) => `${storageKey(name)}_${id}`;
     const legacyScopedStorageKey = (name, id) => `${legacyStorageKey(name)}_${id}`;
 
-    const dbSetTo = (targetDb, key, value, options = {}) => new Promise((resolve, reject) => {
-        if (!targetDb) return reject('DB not initialized');
+    const dbSetTo = (targetDb, key, value, options) => new Promise((resolve, reject) => {
         const request = targetDb.transaction(['store'], 'readwrite')
             .objectStore('store')
             .put(options.clone === false ? value : cloneForStorage(value), key);
@@ -124,7 +123,6 @@
     };
 
     const dbGetFrom = (targetDb, key) => new Promise((resolve, reject) => {
-        if (!targetDb) return resolve(undefined);
         const request = targetDb.transaction(['store'], 'readonly').objectStore('store').get(key);
         request.onsuccess = () => resolve(request.result);
         request.onerror = (event) => reject(event.target.error);
@@ -143,14 +141,13 @@
 
     const dbGetWithLegacy = async (key, oldKey) => {
         const value = await dbGet(key);
-        if (value !== undefined || !oldKey || !legacyDb) return value;
+        if (value !== undefined || !legacyDb) return value;
         const legacyValue = await dbGetFrom(legacyDb, oldKey);
         if (legacyValue !== undefined) await dbSet(key, legacyValue);
         return legacyValue;
     };
 
     const dbDeleteFrom = (targetDb, key) => new Promise((resolve, reject) => {
-        if (!targetDb) return resolve();
         const request = targetDb.transaction(['store'], 'readwrite').objectStore('store').delete(key);
         request.onsuccess = () => resolve();
         request.onerror = (event) => reject(event.target.error);
@@ -159,7 +156,7 @@
     const dbDeleteWithLegacy = async (key, oldKey) => {
         if (!mainDb) await initDB();
         await dbDeleteFrom(mainDb, key);
-        if (oldKey && legacyDb) await dbDeleteFrom(legacyDb, oldKey);
+        if (legacyDb) await dbDeleteFrom(legacyDb, oldKey);
     };
 
     const readStorageKeys = (targetDb) => new Promise((resolve, reject) => {
@@ -200,14 +197,11 @@
     const isEmbeddingLike = value => Array.isArray(value) || ArrayBuffer.isView(value);
     const markRuntimeRaw = (value) => {
         if (!value || typeof value !== 'object') return value;
-        return typeof Vue?.markRaw === 'function' ? Vue.markRaw(value) : value;
+        return Vue.markRaw(value);
     };
 
 
-    const bytesToBase64 = (bytes) => {
-        const source = bytes instanceof Uint8Array
-            ? bytes
-            : new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
+    const bytesToBase64 = (source) => {
         let binary = '';
         const chunkSize = 0x8000;
         for (let i = 0; i < source.length; i += chunkSize) {
@@ -217,7 +211,7 @@
     };
 
     const base64ToInt8Array = (base64) => {
-        const binary = atob(String(base64 || ''));
+        const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
             bytes[i] = binary.charCodeAt(i);
@@ -299,7 +293,7 @@
     };
 
 
-    const trimMemoryText = (text, maxLength = 1800) => {
+    const trimMemoryText = (text, maxLength) => {
         const cleanText = String(text || '').replace(/\n{3,}/g, '\n\n').trim();
         return cleanText.length <= maxLength ? cleanText : `${cleanText.slice(0, maxLength)}...`;
     };
@@ -382,8 +376,8 @@
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-    const indentXmlText = (text, spaces = 0) => {
-        const prefix = ' '.repeat(Math.max(0, spaces));
+    const indentXmlText = (text, spaces) => {
+        const prefix = ' '.repeat(spaces);
         return String(text || '')
             .split(/\r?\n/)
             .map(line => `${prefix}${line}`)
@@ -413,13 +407,13 @@
             : message);
     };
 
-    const getMessageSourceIndexes = (message, index, trackSources) => {
-        const source = message?._sourceIndexes;
-        if (!Array.isArray(source)) return trackSources ? [index] : [];
+    const getMessageSourceIndexes = (message, index) => {
+        const source = message._sourceIndexes;
+        if (!Array.isArray(source)) return [index];
         return [...source];
     };
 
-    const toPlainContextMessage = (message, index, trackSources = false) => {
+    const toPlainContextMessage = (message, index, trackSources) => {
         const nextMessage = {
             role: message.role,
             name: message.name,
@@ -429,9 +423,9 @@
         if (Number.isFinite(message._contextFloor)) nextMessage._contextFloor = message._contextFloor;
         if (message._preventContextMerge === true) nextMessage._preventContextMerge = true;
         if (message._classicMemory === true) nextMessage._classicMemory = true;
-        if (trackSources) nextMessage._sourceIndexes = getMessageSourceIndexes(message, index, true);
-        else if (Array.isArray(message?._sourceIndexes)) nextMessage._sourceIndexes = getMessageSourceIndexes(message, index, false);
-        if (Array.isArray(message?._worldInfoEntries)) nextMessage._worldInfoEntries = message._worldInfoEntries;
+        if (trackSources) nextMessage._sourceIndexes = getMessageSourceIndexes(message, index);
+        else if (Array.isArray(message._sourceIndexes)) nextMessage._sourceIndexes = getMessageSourceIndexes(message, index);
+        if (Array.isArray(message._worldInfoEntries)) nextMessage._worldInfoEntries = message._worldInfoEntries;
         return nextMessage;
     };
 
@@ -480,15 +474,11 @@
         return merged;
     };
 
-    const postprocessContextMessages = (messages) => mergeConsecutiveRoleMessages(messages, {
-        mergeRoles: ['user', 'assistant'],
-        includeSystem: true
-    });
+    const postprocessContextMessages = (messages) => mergeConsecutiveRoleMessages(messages);
 
     const getPostprocessedChatMessages = (messages, options = {}) => {
         const { includeSystem = false } = options;
         return mergeConsecutiveRoleMessages(messages, {
-            mergeRoles: ['user', 'assistant'],
             includeSystem,
             trackSources: true
         });
@@ -501,7 +491,7 @@
                 .filter(message => message && typeof message === 'object' && (includeSystem || message.role !== 'system'))
                 .map((message, index) => {
                     const nextMessage = toPlainContextMessage(message, index, false);
-                    nextMessage._sourceIndexes = getMessageSourceIndexes(message, index, true);
+                    nextMessage._sourceIndexes = getMessageSourceIndexes(message, index);
                     return nextMessage;
                 })
             : getPostprocessedChatMessages(messages, { includeSystem });
@@ -509,8 +499,8 @@
         const turns = [];
         let pendingUser = null;
         processedMessages.forEach((message, messageIndex) => {
-            if (!message || message.role === 'system') return;
-            const sourceIndexes = Array.isArray(message._sourceIndexes) ? message._sourceIndexes : [messageIndex];
+            if (message.role === 'system') return;
+            const sourceIndexes = message._sourceIndexes;
             const sourceStartIndex = sourceIndexes.length ? Math.min(...sourceIndexes) : messageIndex;
             const sourceEndIndex = sourceIndexes.length ? Math.max(...sourceIndexes) : messageIndex;
 
@@ -538,10 +528,9 @@
 
     const getConversationTurnAtIndexFromSnapshot = (snapshot, index) => {
         if (!Number.isFinite(index) || index < 0) return null;
-        const turns = Array.isArray(snapshot?.turns) ? snapshot.turns : [];
-        const matchedTurn = turns.find(turn => (turn.sourceIndexes || []).includes(index));
+        const matchedTurn = snapshot.turns.find(turn => turn.sourceIndexes.includes(index));
         if (matchedTurn) return matchedTurn.turn;
-        return turns.filter(turn => turn.endIndex < index).length + 1;
+        return snapshot.turns.filter(turn => turn.endIndex < index).length + 1;
     };
 
     const toNonNegativeNumber = (value, fallback = 0) => {
@@ -584,10 +573,9 @@
         }
     };
 
-    const resolveWorldInfoEntries = (entries, messages, settings = {}, options = {}) => {
+    const resolveWorldInfoEntries = (entries, messages, settings) => {
         const activeEntries = (Array.isArray(entries) ? entries : []).filter(entry => entry?.enabled !== false);
         const chatMessages = Array.isArray(messages) ? messages : [];
-        const random = typeof options.random === 'function' ? options.random : Math.random;
         const probabilityResults = new Map();
         const triggerMap = new Map();
         const scanTexts = new Map();
@@ -596,7 +584,7 @@
             const probability = Math.min(100, toNonNegativeNumber(entry?.probability, 100));
             if (entry?.useProbability === false || probability >= 100) return true;
             if (!probabilityResults.has(entry)) {
-                probabilityResults.set(entry, probability > 0 && random() * 100 < probability);
+                probabilityResults.set(entry, probability > 0 && Math.random() * 100 < probability);
             }
             return probabilityResults.get(entry) === true;
         };
@@ -649,8 +637,8 @@
     const buildContextViewerState = ({
         messages,
         budgetedEntries,
-        triggeredEntries,
-        postprocessedChatHistory,
+        triggeredEntries: triggerMap,
+        postprocessedChatHistory: chatMessages,
         worldInfoSettings
     }) => {
         const escapeHtml = (value) => String(value || '')
@@ -661,13 +649,10 @@
             .replace(/'/g, '&#039;');
         const getDisplayName = (entry) => entry.comment || entry.name || '未命名条目';
         const floorInfo = new Map();
-        const chatMessages = Array.isArray(postprocessedChatHistory) ? postprocessedChatHistory : [];
-        const triggerMap = triggeredEntries instanceof Map ? triggeredEntries : new Map();
-        const scanDepth = toNonNegativeNumber(worldInfoSettings?.scanDepth, 2);
-        const maxScanDepth = toNonNegativeNumber(worldInfoSettings?.maxDepth, 0);
+        const scanDepth = toNonNegativeNumber(worldInfoSettings.scanDepth, 2);
+        const maxScanDepth = toNonNegativeNumber(worldInfoSettings.maxDepth, 0);
 
         triggerMap.forEach((data, entry) => {
-            if (!data.matchedKeys) return;
             const rawEntryScanDepth = toNonNegativeNumber(entry.scanDepth ?? scanDepth, 0);
             const entryScanDepth = maxScanDepth > 0 ? Math.min(rawEntryScanDepth, maxScanDepth) : rawEntryScanDepth;
             const entryStart = Math.max(0, chatMessages.length - entryScanDepth);
@@ -694,14 +679,14 @@
             }).join(', ');
         };
 
-        const worldInfoContents = (Array.isArray(budgetedEntries) ? budgetedEntries : [])
+        const worldInfoContents = budgetedEntries
             .map(entry => String(entry.content || '').trim())
             .filter(Boolean);
-        const triggeredWorldInfos = (Array.isArray(budgetedEntries) ? budgetedEntries : []).map(entry => ({
+        const triggeredWorldInfos = budgetedEntries.map(entry => ({
             name: getDisplayName(entry),
             triggers: getTriggerText(entry)
         }));
-        const contextMessages = (Array.isArray(messages) ? messages : []).map(message => {
+        const contextMessages = messages.map(message => {
             const injectedWorldInfos = new Map();
             (Array.isArray(message._worldInfoEntries) ? message._worldInfoEntries : []).forEach(entry => {
                 if (entry) injectedWorldInfos.set(getDisplayName(entry), getTriggerText(entry));
@@ -724,7 +709,6 @@
                 : String(message.content || '');
             let renderedContent = escapeHtml(content);
             Array.from(floorInfo.keys()).sort((a, b) => b.length - a.length).forEach(key => {
-                if (!key) return;
                 const escapedKey = key.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
                 renderedContent = renderedContent.replace(
                     new RegExp(`(${escapedKey})(?![^<]*>)`, 'gi'),
@@ -763,11 +747,10 @@
 
     const injectContextMessages = ({
         messages,
-        worldInfoGroups,
-        safeTargetLimit = 1
+        worldInfoGroups: groups,
+        safeTargetLimit
     }) => {
-        const groups = worldInfoGroups || {};
-        const finalMessages = [...(Array.isArray(messages) ? messages : [])];
+        const finalMessages = [...messages];
         const joinEntries = (entries) => entries
             .map(entry => `[${entry.comment || 'Entry'}]\n${entry.content}`)
             .join('\n\n');
@@ -785,7 +768,7 @@
             return Math.max(targetIndex, safeTargetLimit);
         };
 
-        const depthEntries = Array.isArray(groups.at_depth) ? groups.at_depth : [];
+        const depthEntries = groups.at_depth;
         depthEntries.sort((a, b) => (a.order || 0) - (b.order || 0));
         depthEntries.forEach(entry => {
             finalMessages.splice(findDepthIndex(entry.depth !== undefined ? entry.depth : 4), 0, {
@@ -795,7 +778,7 @@
             });
         });
 
-        const userTopEntries = Array.isArray(groups.user_top) ? groups.user_top : [];
+        const userTopEntries = groups.user_top;
         if (userTopEntries.length > 0) {
             const lastUserMessage = finalMessages.slice().reverse().find(message => message.role === 'user');
             if (lastUserMessage) {
@@ -807,7 +790,7 @@
             }
         }
 
-        const assistantTopEntries = Array.isArray(groups.assistant_top) ? groups.assistant_top : [];
+        const assistantTopEntries = groups.assistant_top;
         if (assistantTopEntries.length > 0) {
             const lastAssistantMessage = finalMessages.slice().reverse().find(message => message?.role === 'assistant');
             if (lastAssistantMessage) {
@@ -826,17 +809,13 @@
         buildContextViewerState,
         buildConversationTurnSnapshot,
         escapeXmlAttribute,
-        escapeXmlText,
         getConversationTurnAtIndexFromSnapshot,
         getPostprocessedChatMessages,
         indentXmlText,
         injectContextMessages,
         isRoleMemoryContextContent,
-        mergeConsecutiveRoleMessages,
         postprocessContextMessages,
-        resolveWorldInfoEntries,
-        toNonNegativeNumber,
-        worldInfoKeyMatchesText
+        resolveWorldInfoEntries
     };
 })();
 
@@ -885,7 +864,7 @@
             const id = String(branch?.id || '').trim();
             if (!id || seen.has(id)) return null;
             seen.add(id);
-            const fallbackName = id === STORY_BRANCH_MAIN_ID ? '主线' : `分支 ${index + 1}`;
+            const fallbackName = `分支 ${index + 1}`;
             const name = id === STORY_BRANCH_MAIN_ID
                 ? '主线'
                 : String(branch?.name || fallbackName).trim().replace(/^路线(?=\s*\d+$)/, '分支');
@@ -981,7 +960,6 @@
             const wordCount = isActive ? activeWordCount : branch.wordCount;
             return {
                 ...branch,
-                ...position,
                 x: position.x + horizontalOffset,
                 y: position.y + verticalOffset,
                 centerX: position.centerX + horizontalOffset,
@@ -1027,8 +1005,6 @@
 // --- UI-template utilities ---
 (function () {
     const { generateUUID } = window.RPHubUtils;
-    const DEFAULT_HTML = '';
-    const DEFAULT_VARIABLES = {};
 
     const cloneUiObject = (value) => JSON.parse(JSON.stringify(value || {}));
     const cloneUiValue = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -1043,7 +1019,7 @@
         if (template.initialVariableState && typeof template.initialVariableState === 'object') {
             return cloneUiObject(template.initialVariableState);
         }
-        let baseState = cloneUiObject(variableState || template.variableState || template.variables || DEFAULT_VARIABLES);
+        let baseState = cloneUiObject(variableState || template.variableState || template.variables);
         const logs = Array.isArray(template.changeLog) ? [...template.changeLog].sort((a, b) => (a.time || 0) - (b.time || 0)) : [];
         const initializedKeys = new Set();
         logs.forEach(log => {
@@ -1065,7 +1041,7 @@
                 ? cloneUiObject(template.variables)
                 : (template.initialVariableState && typeof template.initialVariableState === 'object'
                     ? cloneUiObject(template.initialVariableState)
-                    : { ...DEFAULT_VARIABLES }));
+                    : {}));
         return {
             id: template.id || generateUUID(),
             name: template.name || 'UI模板',
@@ -1073,7 +1049,7 @@
             scope: template.scope === 'global' ? 'global' : 'character',
             order: Number.isFinite(Number(template.order)) ? Number(template.order) : 100,
             placement: ['top', 'bottom'].includes(template.placement) ? template.placement : 'bottom',
-            htmlTemplate: stripUiTemplateCodeFence(template.htmlTemplate || template.template || DEFAULT_HTML),
+            htmlTemplate: stripUiTemplateCodeFence(template.htmlTemplate || template.template),
             initialVariableState: inferInitialUiTemplateState(template, variableState),
             variableState,
             variableSchema: (template.variableSchema && (typeof template.variableSchema === 'object' || typeof template.variableSchema === 'string')) ? template.variableSchema : '',
@@ -1083,7 +1059,7 @@
         };
     };
 
-    const sanitizeUiTemplateImportEntry = (template = {}) => {
+    const sanitizeUiTemplateImportEntry = (template) => {
         const { changeLog, runtimeByCharacter, variableState, model, version, ...cleanTemplate } = template || {};
         if (!cleanTemplate.initialVariableState && !cleanTemplate.variables && variableState && typeof variableState === 'object') {
             cleanTemplate.initialVariableState = cloneUiObject(variableState);
@@ -1200,25 +1176,25 @@
         ...overrides
     });
 
-    const renderUiTemplateString = (templateText, variables = {}, context = null) => {
+    const renderUiTemplateString = (templateText, variables, context = null) => {
         const activeContext = context || createUiTemplateRenderContext(variables);
         const withArrays = renderUiTemplateEachBlocks(String(templateText || ''), variables, activeContext);
         return withArrays.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, expression) => {
-            const key = String(expression || '').trim();
+            const key = expression.trim();
             if (!key || key === 'else' || key.startsWith('#') || key.startsWith('/')) return match;
             return escapeUiValue(getUiTemplateValue(variables, key, activeContext));
         });
     };
 
-    const renderUiTemplateEachBlocks = (templateText, variables = {}, context = null) => {
-        let output = String(templateText || '');
+    const renderUiTemplateEachBlocks = (templateText, variables, context) => {
+        let output = templateText;
         const eachBlockPattern = /\{\{\s*#each\s+([^\s}]+)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*\}\}((?:(?!\{\{\s*#each\b)[\s\S])*?)\{\{\s*\/each\s*\}\}/g;
         for (let pass = 0; pass < 50; pass++) {
             let replaced = false;
             output = output.replace(eachBlockPattern, (match, path, alias, body) => {
                 replaced = true;
                 const value = getUiTemplateValue(variables, path, context);
-                const [itemTemplate, emptyTemplate = ''] = String(body || '').split(/\{\{\s*else\s*\}\}/i);
+                const [itemTemplate, emptyTemplate = ''] = body.split(/\{\{\s*else\s*\}\}/i);
                 const entries = Array.isArray(value)
                     ? value.map((item, index) => ({ item, key: index, index }))
                     : (isUiTemplateObject(value)
@@ -1360,7 +1336,7 @@ ${content}
 </html>`;
     };
 
-    const createExecutableHtmlIframe = (rawHtml, extraClass = '') => {
+    const createExecutableHtmlIframe = (rawHtml, extraClass) => {
         const iframe = document.createElement('iframe');
         iframe.className = `w-full bg-white block executable-html-frame ${extraClass}`.trim();
         iframe.style.height = 'auto';
@@ -1371,23 +1347,11 @@ ${content}
         iframe.setAttribute('scrolling', 'no');
         iframe.setAttribute('sandbox', htmlIframeSandbox);
         iframe.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen; autoplay; encrypted-media; picture-in-picture');
-        iframe.onload = function () {
-            try {
-                setTimeout(() => {
-                    if (this.contentWindow && this.contentWindow.document) {
-                        const doc = this.contentWindow.document;
-                        this.style.height = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight) + 'px';
-                    }
-                }, 100);
-            } catch (error) {
-                console.warn('Failed to resize iframe:', error);
-            }
-        };
         iframe.srcdoc = buildExecutableHtmlDocument(rawHtml);
         return iframe;
     };
 
-    const renderExecutableHtmlFrame = (rawHtml, extraClass = '') => {
+    const renderExecutableHtmlFrame = (rawHtml, extraClass) => {
         const container = document.createElement('div');
         container.className = 'html-card-container ui-template-frame-container';
         container.style.margin = '0';
@@ -1581,22 +1545,17 @@ ${content}
 
     window.RPHubUiTemplateUtils = {
         applyUiTemplateUpdateListToTemplate,
-        buildExecutableHtmlDocument,
         cloneUiObject,
-        cloneUiValue,
         createExecutableHtmlIframe,
         findUiTemplateUpdateBlock,
-        getUiTemplateValue,
         inferInitialUiTemplateState,
         normalizeUiTemplate,
         normalizeUiTemplateUpdateList,
         parseUiTemplateUpdates,
         renderUiTemplateHtml,
-        renderUiTemplateString,
         sanitizeUiTemplateImportEntry,
         setUiTemplateValue,
         stringifyUiSchema,
-        stripUiTemplateCodeFence,
         stripUiTemplateUpdateBlock
     };
 })();

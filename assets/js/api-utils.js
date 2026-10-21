@@ -5,7 +5,7 @@
     const buildApiEndpoint = (baseUrl, path) => {
         const root = String(baseUrl || '').replace(/\/+$/, '');
         const apiRoot = /\/v1$/i.test(root) ? root : `${root}/v1`;
-        return `${apiRoot}/${String(path || '').replace(/^\/+/, '')}`;
+        return `${apiRoot}/${path}`;
     };
 
     const buildUserInputToolMessages = (text, callId) => [
@@ -85,7 +85,7 @@
         let timedOut = false;
         const touch = () => {
             clearTimeout(timer);
-            timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? 120000);
+            timer = setTimeout(() => { timedOut = true; controller.abort(); }, 120000);
         };
         if (options.signal?.aborted) abort();
         else options.signal?.addEventListener('abort', abort, { once: true });
@@ -254,7 +254,7 @@
             const choice = data.choices?.[0] || {};
             const message = choice.delta || choice.message || {};
             let content = readTextContent(message.content ?? choice.text);
-            const reasoning = extractNativeReasoning(message) || extractNativeReasoning(choice) || '';
+            const reasoning = extractNativeReasoning(message) || extractNativeReasoning(choice);
             plainContent += content;
             refusal += readTextContent(message.refusal);
             // 保留转接接口返回的签名和推理字段，原样用于本轮工具结果回传，不混进聊天正文。

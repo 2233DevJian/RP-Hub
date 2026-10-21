@@ -15,7 +15,7 @@ const BACKUP_DIR = path.resolve(process.env.BACKUP_DIR || 'backup-data');
 const BLOB_DIR = path.join(BACKUP_DIR, 'blobs');
 const MANIFEST_DIR = path.join(BACKUP_DIR, 'manifests');
 const TMP_DIR = path.join(BACKUP_DIR, 'tmp');
-const MAX_BACKUP_BYTES = 500 * MB;
+const MAX_BACKUP_BYTES = 1024 * MB;
 const MAX_TOTAL_BYTES = (Number(process.env.BACKUP_MAX_TOTAL_GB) || 1000) * 1024 * MB;
 const FREE_SPACE_RESERVE = 1024 * MB;
 const RETENTION_MS = 15 * 24 * HOUR;
@@ -84,7 +84,7 @@ const limitBytes = max => {
     return new Transform({
         transform(chunk, _encoding, callback) {
             total += chunk.length;
-            callback(total > max ? httpError(413, '单项内容超过 500MB') : null, chunk);
+            callback(total > max ? httpError(413, '单项内容超过 1GB') : null, chunk);
         }
     });
 };
@@ -127,7 +127,7 @@ const readBlobSize = async (hash) => {
 
 const receiveBlob = async (request, hash, ip) => {
     const length = Number(request.headers['content-length']) || 0;
-    if (length > MAX_BACKUP_BYTES) throw httpError(413, '单项内容超过 500MB');
+    if (length > MAX_BACKUP_BYTES) throw httpError(413, '单项内容超过 1GB');
     if (overLimit('upload', ip, 5 * 1024 * MB, HOUR, length)) throw httpError(429, '上传太频繁，请稍后再试');
     await ensureSpace(length);
     const target = blobPath(hash);
@@ -188,7 +188,7 @@ const createBackup = async (request, ip) => {
     const pieces = characters.flatMap(item => [item, ...item.entries]);
     const backupBytes = pieces.reduce((total, piece) => total + piece.size, 0);
     if (backupBytes > MAX_BACKUP_BYTES) {
-        throw httpError(413, '角色卡和聊天加起来超过 500MB，超出单次备份上限');
+        throw httpError(413, '角色卡和聊天加起来超过 1GB，超出单次备份上限');
     }
     const sizes = new Map(pieces.map(piece => [piece.hash, piece.size]));
     const missing = [];
@@ -297,7 +297,7 @@ export const initBackup = async () => {
         stats = JSON.parse(await fsp.readFile(STATS_FILE, 'utf8').catch(() => '{}'));
         await collectGarbage();
         setInterval(collectGarbage, HOUR).unref();
-        setInterval(() => saveStats().catch(error => console.warn('Saving backup stats failed:', error.message)), 60_000).unref();
+        setInterval(flushBackupStats, 60_000).unref();
         ready = true;
         console.log(`Cloud backup stored in ${BACKUP_DIR}`);
     } catch (error) {

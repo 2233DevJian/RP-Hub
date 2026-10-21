@@ -31,7 +31,6 @@
                 --surface: #1a1a19;
                 --ink: #f0efec;
                 --ink-2: #c3c2b7;
-                --ink-3: #898781;
                 --grid: #2c2c2a;
                 --axis: #383835;
                 --border: rgba(255, 255, 255, 0.1);
@@ -146,7 +145,6 @@
         td { font-variant-numeric: tabular-nums; }
         td small { margin-left: 6px; color: var(--ink-3); font-size: 12px; }
         tbody tr:hover { background: var(--wash); }
-        .empty { padding: 28px; color: var(--ink-3); text-align: center; }
 
         /* Login */
         .login { max-width: 360px; margin: 16vh auto 0; padding: 28px; }
@@ -343,7 +341,7 @@
             const shares = bytes || Number.isInteger(top / 2) ? [0, 0.5, 1] : [0, 1];
             return { top, shares, format: value => (bytes ? `${Number((value / base).toFixed(2))} ${UNITS[unit]}` : formatCount(value)) };
         };
-        const svg = (tag, attrs = {}) => {
+        const svg = (tag, attrs) => {
             const node = document.createElementNS(SVG_NS, tag);
             Object.entries(attrs).forEach(([name, value]) => node.setAttribute(name, value));
             return node;

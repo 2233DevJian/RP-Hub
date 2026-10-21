@@ -6,7 +6,7 @@
 
     const createMessageRenderer = ({
         processRegex, replaceUserPlaceholder, createExecutableHtmlIframe, marked, DOMPurify,
-        getMemoryCitationLabel = () => '', getMemoryCitationVersion = () => ''
+        getMemoryCitationLabel, getMemoryCitationVersion
     }) => {
         const renderedCache = new Map();
         const frameDetectionCache = new Map();
@@ -37,8 +37,8 @@
             const codeFencePattern = /```([^\n`]*)\n?([\s\S]*?)```/g;
             let codeMatch;
             while ((codeMatch = codeFencePattern.exec(trimmed)) !== null) {
-                const language = codeMatch[1] || '';
-                const content = codeMatch[2] || '';
+                const language = codeMatch[1];
+                const content = codeMatch[2];
                 if (/\b(html|xml)\b/i.test(language)
                     || /^\s*<(!doctype|html|head|body|div|span|style|script|table|img)/i.test(content)) {
                     usesFrame = true;
@@ -278,7 +278,7 @@
     const { computed, reactive, ref, watch } = Vue;
 
     const useTokenUsage = ({
-        pageSize = 10,
+        pageSize,
         cloneForStorage,
         confirm,
         ensureStorage,
@@ -413,14 +413,14 @@
                 timestamp: Date.now(),
                 type: meta.type || 'chat',
                 model: String(meta.model || ''),
-                apiUrl: String(meta.apiUrl ?? getApiUrl?.() ?? ''),
+                apiUrl: String(meta.apiUrl ?? getApiUrl() ?? ''),
                 isStream: meta.isStream === true,
                 durationMs: Number.isFinite(meta.durationMs) ? Math.max(0, meta.durationMs) : null,
                 outputCharacters: Number.isFinite(meta.outputCharacters) ? Math.max(0, meta.outputCharacters) : null,
                 ...normalizeApiUsage(usage)
             });
             tokenUsageHistory.value.unshift(record);
-            const apiKey = String(meta.apiKey ?? getApiKey?.() ?? '').trim();
+            const apiKey = String(meta.apiKey ?? getApiKey() ?? '').trim();
             if (record.apiUrl && apiKey) fetchLatestQuota(record, apiKey);
             saveTokenUsageHistoryNow().catch(error => console.error('Token usage history save failed:', error));
         };

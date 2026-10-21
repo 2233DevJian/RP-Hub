@@ -5,17 +5,6 @@
     const { ref, computed, nextTick, watch, onBeforeUnmount } = Vue;
 
     const toOption = (option, index) => {
-        if (!option || typeof option !== 'object') {
-            return {
-                value: option,
-                label: String(option ?? ''),
-                description: '',
-                disabled: false,
-                group: '',
-                key: `${index}:${String(option ?? '')}`
-            };
-        }
-
         const value = option.value;
         return {
             value,
@@ -38,14 +27,6 @@
                 type: Array,
                 default: () => []
             },
-            placeholder: {
-                type: String,
-                default: '请选择'
-            },
-            disabled: {
-                type: Boolean,
-                default: false
-            },
             buttonClass: {
                 type: [String, Array, Object],
                 default: ''
@@ -53,13 +34,9 @@
             menuClass: {
                 type: [String, Array, Object],
                 default: ''
-            },
-            optionClass: {
-                type: [String, Array, Object],
-                default: ''
             }
         },
-        emits: ['update:modelValue', 'change'],
+        emits: ['update:modelValue'],
         setup(props, { emit }) {
             const isOpen = ref(false);
             const triggerRef = ref(null);
@@ -75,12 +52,12 @@
             const selectedOption = computed(() => (
                 normalizedOptions.value.find(option => optionMatches(option.value, props.modelValue))
             ));
-            const selectedLabel = computed(() => selectedOption.value?.label || props.placeholder);
+            const selectedLabel = computed(() => selectedOption.value?.label || '请选择');
 
             const shouldShowGroup = (index) => {
                 const option = normalizedOptions.value[index];
-                if (!option?.group) return false;
-                return index === 0 || normalizedOptions.value[index - 1]?.group !== option.group;
+                if (!option.group) return false;
+                return index === 0 || normalizedOptions.value[index - 1].group !== option.group;
             };
 
             const updateMenuPosition = () => {
@@ -115,11 +92,8 @@
                 isOpen.value = false;
             };
 
-            const openMenu = async () => {
-                if (props.disabled) return;
+            const openMenu = () => {
                 isOpen.value = true;
-                await nextTick();
-                updateMenuPosition();
             };
 
             const toggleMenu = () => {
@@ -133,7 +107,6 @@
             const selectOption = (option) => {
                 if (!option || option.disabled) return;
                 emit('update:modelValue', option.value);
-                emit('change', option.value);
                 closeMenu();
             };
 
@@ -203,7 +176,6 @@
                 <button
                     ref="triggerRef"
                     type="button"
-                    :disabled="disabled"
                     :aria-expanded="isOpen ? 'true' : 'false'"
                     aria-haspopup="listbox"
                     :class="[
@@ -260,8 +232,7 @@
                                     :class="[
                                         'flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors',
                                         option.disabled ? 'cursor-not-allowed text-gray-300' : 'text-gray-700 hover:bg-primary-50 hover:text-primary-700',
-                                        isSelected(option) && !option.disabled ? 'bg-primary-50 text-primary-700 font-bold' : '',
-                                        optionClass
+                                        isSelected(option) && !option.disabled ? 'bg-primary-50 text-primary-700 font-bold' : ''
                                     ]"
                                     @click="selectOption(option)"
                                 >
@@ -307,7 +278,7 @@
     const advancedItems = Object.freeze([
         { view: 'presets', label: '预设', icon: 'M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4M6 18a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4' },
         { view: 'worldinfo', label: '世界书', icon: 'M12 6.25v13m0-13C10.83 5.48 9.25 5 7.5 5S4.17 5.48 3 6.25v13C4.17 18.48 5.75 18 7.5 18s3.33.48 4.5 1.25m0-13C13.17 5.48 14.75 5 16.5 5S19.83 5.48 21 6.25v13C19.83 18.48 18.25 18 16.5 18s-3.33.48-4.5 1.25' },
-        { view: 'regex', label: '正则', title: '正则脚本', icon: 'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4' },
+        { view: 'regex', label: '正则', icon: 'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4' },
         { view: 'tools', label: '工具', icon: 'M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94L14.7 6.3z' }
     ]);
 
@@ -504,9 +475,7 @@
     const GenerationTimer = {
         props: {
             waitTime: Number,
-            estimatedTime: Number,
-            remoteEstimatedTime: Number,
-            remote: Boolean
+            estimatedTime: Number
         },
         template: `
             <div class="typing-timer-badge flex items-center gap-1.5 text-[11px] font-mono px-2.5 py-1 rounded-full animate-fade-in mt-1 shadow-sm">
@@ -515,10 +484,50 @@
                 </svg>
                 <span class="whitespace-nowrap">
                     {{ waitTime }}s
-                    <span v-if="estimatedTime || remoteEstimatedTime" class="text-gray-300 mx-0.5">/</span>
-                    <span v-if="estimatedTime && !remote">{{ estimatedTime }}s</span>
-                    <span v-else-if="remoteEstimatedTime">{{ remoteEstimatedTime }}s</span>
+                    <span v-if="estimatedTime" class="text-gray-300 mx-0.5">/</span>
+                    <span v-if="estimatedTime">{{ estimatedTime }}s</span>
                 </span>
+            </div>`
+    };
+
+    // A key field, shown as dots. While it is in use, two buttons appear on its right: copy (a password field
+    // will not let the browser copy it) and show/hide. Leaving the field hides the key again.
+    const SecretInput = {
+        props: {
+            modelValue: { type: String, default: '' },
+            placeholder: { type: String, default: '' },
+            inputClass: { type: [String, Array, Object], default: '' }
+        },
+        emits: ['update:modelValue'],
+        data: () => ({ visible: false, copied: false }),
+        methods: {
+            copy() {
+                navigator.clipboard.writeText(this.modelValue).then(() => {
+                    this.copied = true;
+                    clearTimeout(this.copiedTimer);
+                    this.copiedTimer = setTimeout(() => { this.copied = false; }, 1500);
+                }).catch(() => {});
+            },
+            hideOnLeave(event) {
+                if (!this.$el.contains(event.relatedTarget)) this.visible = false;
+            }
+        },
+        template: `
+            <div class="secret-input" @focusout="hideOnLeave">
+                <input :value="modelValue" @input="$emit('update:modelValue', $event.target.value)"
+                    :type="visible ? 'text' : 'password'" :placeholder="placeholder" :class="inputClass" spellcheck="false">
+                <div class="secret-input__actions">
+                    <button type="button" @mousedown.prevent @click="copy" :disabled="!modelValue"
+                        :title="copied ? '已复制' : '复制'" :aria-label="copied ? '已复制' : '复制'">
+                        <svg v-if="copied" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                        <svg v-else fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" stroke-width="2"></rect><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>
+                    </button>
+                    <button type="button" @mousedown.prevent @click="visible = !visible" :aria-pressed="visible"
+                        :title="visible ? '隐藏' : '显示'" :aria-label="visible ? '隐藏' : '显示'">
+                        <svg v-if="visible" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>
+                        <svg v-else fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                    </button>
+                </div>
             </div>`
     };
 
@@ -677,9 +686,7 @@
                 show.value = true;
             };
             const handleRemoteUpdate = (event) => {
-                const versionId = Number(event?.detail?.versionId);
-                if (!Number.isInteger(versionId) || versionId < 10000 || versionId > 99999
-                    || versionId <= Number(props.update.id)) return;
+                const versionId = event.detail.versionId;
                 if (remoteUpdateId.value !== null) {
                     remoteUpdateId.value = Math.max(remoteUpdateId.value, versionId);
                 } else if (show.value) {
@@ -800,7 +807,7 @@
                 return minutes < 60 ? minutes + '分钟' : Math.floor(minutes / 60) + '小时' + (minutes % 60 ? minutes % 60 + '分钟' : '');
             };
             const stageTiming = stage => {
-                if (stage.current >= stage.total || !running.value || props.progress.phase !== stage.key) return '';
+                if (props.progress.phase !== stage.key) return '';
                 if (!stage.current || !stage.elapsedMs) return '';
                 const remaining = stage.elapsedMs / stage.current * (stage.total - stage.current);
                 return '预计' + formatDuration(remaining);
@@ -1281,6 +1288,14 @@
             </modal-shell>`
     };
 
+    // Methods shared by the editor modals below.
+    function updateField(field, value) {
+        this.$emit('update-field', { field, value });
+    }
+    function updateNumber(field, value) {
+        this.updateField(field, value === '' ? '' : Number(value));
+    }
+
     const CharacterEditorModal = {
         props: {
             show: Boolean,
@@ -1297,11 +1312,7 @@
                 { value: 'first_mes', label: '开场白' }
             ]
         }),
-        methods: {
-            updateField(field, value) {
-                this.$emit('update-field', { field, value });
-            }
-        },
+        methods: { updateField },
         template: `
             <modal-shell :show="show" overlay-class="z-50 p-0 md:p-4"
                 panel-class="bg-white md:rounded-2xl border-0 md:border border-gray-200 w-full max-w-2xl h-full md:h-[750px] flex flex-col shadow-2xl overflow-hidden">
@@ -1386,9 +1397,7 @@
         },
         emits: ['close', 'save', 'update-field'],
         methods: {
-            updateField(field, value) {
-                this.$emit('update-field', { field, value });
-            },
+            updateField,
             togglePlacement(value) {
                 const placement = Array.isArray(this.script.placement) ? [...this.script.placement] : [];
                 const index = placement.indexOf(value);
@@ -1400,9 +1409,7 @@
                 this.updateField(key, checked);
                 if (checked) this.updateField(key === 'markdownOnly' ? 'promptOnly' : 'markdownOnly', false);
             },
-            updateNumber(field, value) {
-                this.updateField(field, value === '' ? '' : Number(value));
-            }
+            updateNumber
         },
         template: `
             <modal-shell :show="show" overlay-class="z-50 p-2 md:p-3"
@@ -1526,15 +1533,11 @@
         },
         emits: ['close', 'save', 'update:tab', 'update-field'],
         methods: {
-            updateField(field, value) {
-                this.$emit('update-field', { field, value });
-            },
-            updateNumber(field, value) {
-                this.updateField(field, value === '' ? '' : Number(value));
-            },
+            updateField,
+            updateNumber,
             formatLogMeta(log) {
-                const time = Number(log?.time) ? new Date(log.time).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
-                return [log?.turn ? `第 ${log.turn} 轮` : '', time].filter(Boolean).join(' · ');
+                const time = Number(log.time) ? new Date(log.time).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+                return [log.turn ? `第 ${log.turn} 轮` : '', time].filter(Boolean).join(' · ');
             },
             formatChangeValue(value) {
                 if (value === undefined || value === null || value === '') return '空';
@@ -1547,10 +1550,6 @@
             },
             checkProtocol() {
                 const utils = window.RPHubUiTemplateUtils;
-                if (!utils?.normalizeUiTemplateUpdateList) {
-                    this.protocolCheck = { ok: false, message: '模板校验器尚未加载' };
-                    return;
-                }
                 let variableState;
                 try {
                     variableState = JSON.parse(this.templateData.variableStateText || '{}');
@@ -1737,12 +1736,8 @@
         },
         emits: ['close', 'save', 'update-field', 'update-keys'],
         methods: {
-            updateField(field, value) {
-                this.$emit('update-field', { field, value });
-            },
-            updateNumber(field, value) {
-                this.updateField(field, value === '' ? '' : Number(value));
-            },
+            updateField,
+            updateNumber,
             updateRegexMode(checked) {
                 this.updateField('useRegex', checked);
                 this.$emit('update-keys', this.keysText);
@@ -2142,15 +2137,18 @@
             ]);
             const total = computed(() => parts.value.reduce((sum, part) => sum + (part.value || 0), 0));
             const totalReports = computed(() => parts.value.reduce((sum, part) => sum + (part.reports || 0), 0));
+            // Under a second in ms, under a minute in seconds (12.3s), longer as minutes and seconds (2m5s).
             const formatDuration = (value) => {
                 if (!Number.isFinite(value)) return '';
                 if (value < 1000) return `${Math.round(value)}ms`;
-                return `${Number((value / 1000).toFixed(1))}s`;
+                if (value < 59950) return `${Number((value / 1000).toFixed(1))}s`;
+                const seconds = Math.round(value / 1000);
+                return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
             };
             const formatOutputSpeed = (record) => {
-                if (record?.isStream !== true
-                    || !Number.isFinite(record?.durationMs) || record.durationMs <= 0
-                    || !Number.isFinite(record?.outputCharacters) || record.outputCharacters <= 0) return '';
+                if (record.isStream !== true
+                    || !Number.isFinite(record.durationMs) || record.durationMs <= 0
+                    || !Number.isFinite(record.outputCharacters) || record.outputCharacters <= 0) return '';
                 return `${Math.round(record.outputCharacters * 1000 / record.durationMs)} 字/s`;
             };
             return {
@@ -2673,7 +2671,7 @@
                 </div>
                 <template v-if="mobile">
                     <div v-if="deck" class="character-deck__placeholder" aria-hidden="true">{{ (char.name || '角').slice(0, 1) }}</div>
-                    <img v-if="!deck || char?.avatar" :src="char?.avatar" :alt="char.name" draggable="false"
+                    <img v-if="!deck || char.avatar" :src="char.avatar" :alt="char.name" draggable="false"
                         class="absolute inset-0 w-full h-full object-cover" :loading="deck ? 'eager' : 'lazy'" decoding="async">
                     <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent"></div>
 
@@ -2733,7 +2731,7 @@
 
                 <template v-else>
                     <div class="aspect-w-2 aspect-h-3 relative h-[500px] overflow-hidden">
-                        <img :src="char?.avatar" class="character-card-cover w-full h-full object-cover" loading="lazy" decoding="async">
+                        <img :src="char.avatar" class="character-card-cover w-full h-full object-cover" loading="lazy" decoding="async">
                         <div class="absolute inset-0 bg-gradient-to-t from-gray-900 via-gray-900/20 to-transparent opacity-60 group-hover:opacity-80 transition-opacity"></div>
 
                         <div v-if="active && !batchMode" class="absolute top-4 left-4 z-10">
@@ -2871,7 +2869,6 @@
                 const result = [];
                 const leftCount = Math.min(2, Math.floor((count - (dragOffset.value > 0 ? 0 : 1)) / 2));
                 for (let offset = -leftCount; offset <= Math.min(2, count - leftCount - 1); offset++) {
-                    if (!count) break;
                     const index = (focusedIndex.value + offset + count) % count;
                     const position = offset + dragOffset.value;
                     result.push({ ...props.items[index], offset, position, depth: Math.abs(position) });
@@ -3048,6 +3045,7 @@
         PresetEditorModal,
         RegexEditorModal,
         RetryConfirmModal,
+        SecretInput,
         SettingsHelp,
         SettingsPageHeader,
         MemoryBackfillModal,

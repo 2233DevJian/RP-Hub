@@ -108,7 +108,7 @@
             <div v-show="currentView === 'chat'" class="chat-view-root flex flex-col h-full relative">
 
                 <!-- Character Background Layer -->
-                <div v-if="settings.useCharacterBackground && currentCharacter && currentCharacter?.avatar"
+                <div v-if="settings.useCharacterBackground && currentCharacter?.avatar"
                     class="absolute -inset-4 bg-cover bg-center bg-no-repeat pointer-events-none transition-opacity duration-500 z-0 blur-[2px] char-bg-blur"
                     :style="{ backgroundImage: `url(${JSON.stringify(currentCharacterAvatar)})`, opacity: 0.9 }">
                 </div>
@@ -259,7 +259,7 @@
                 <div ref="chatContainer" @click="showChatModelSelector = false"
                     @scroll="handleChatScroll"
                     class="flex-1 overflow-y-auto overflow-x-hidden px-2 pt-14 md:pt-16 pb-52 md:pb-60 relative z-0 space-y-12 md:space-y-14"
-                    :class="!settings.useCharacterBackground || !currentCharacter || !currentCharacter?.avatar ? 'chat-ambient' : ''">
+                    :class="!settings.useCharacterBackground || !currentCharacter?.avatar ? 'chat-ambient' : ''">
                     <div v-if="!currentCharacter" class="chat-empty">
                         <div class="chat-empty__icon">
                             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -291,9 +291,9 @@
                                 :class="['flex-shrink-0 select-none', msg.shouldAnimate && msg.role !== 'system' ? 'animate-message-fade-in' : '']">
                                 <div v-if="msg.role === 'user'"
                                     :class="['msg-avatar w-9 h-9 rounded-full overflow-hidden', msg.isSelf ? 'ml-2' : 'mr-2']">
-                                    <img v-if="msg?.avatar || (msg?.isSelf && user?.avatar)"
-                                        :src="msg?.avatar || user?.avatar" class="w-full h-full object-cover">
-                                    <img v-else-if="!msg?.avatar && !msg?.isSelf && user?.avatar" :src="user?.avatar"
+                                    <img v-if="msg.avatar || (msg.isSelf && user.avatar)"
+                                        :src="msg.avatar || user.avatar" class="w-full h-full object-cover">
+                                    <img v-else-if="!msg.isSelf && user.avatar" :src="user.avatar"
                                         class="w-full h-full object-cover"
                                         title="Fallback to user avatar for legacy messages">
                                     <div v-else
@@ -309,7 +309,7 @@
                                 <!-- Name (Outside Bubble) -->
                                 <div v-show="!settings.immersiveMode"
                                     :class="['msg-name-tag truncate max-w-[210px] md:max-w-[250px]', msg.isSelf ? 'ml-auto mr-1' : 'mr-auto ml-1', msg.shouldAnimate && msg.role !== 'system' ? 'animate-message-fade-in' : '']">
-                                    {{ msg.name || (msg.role === 'user' ? user.name : (currentCharacter?.name || 'Unknown')) }}
+                                    {{ msg.name || (msg.role === 'user' ? user.name : (currentCharacter.name || 'Unknown')) }}
                                 </div>
                                 <!-- Message Bubble -->
                                 <div class="group relative min-w-0 max-w-full"
@@ -458,15 +458,13 @@
                                                 </div>
                                             </div>
                                             <!-- Active Tool Calls -->
-                                            <div v-if="msg.role === 'assistant' && activeToolContinuationMessageId === msg.id && (isGenerating || isRemoteGenerating) && !activeToolContinuationHasResponse && !isThinking"
+                                            <div v-if="msg.role === 'assistant' && activeToolContinuationMessageId === msg.id && isGenerating && !activeToolContinuationHasResponse && !isThinking"
                                                 class="active-tool-waiting">
                                                 <div class="typing-indicator scale-125">
                                                     <span></span><span></span><span></span>
                                                 </div>
                                                 <generation-timer v-if="isGenerating" :wait-time="currentWaitTime"
-                                                    :estimated-time="estimatedGenerationTime"
-                                                    :remote-estimated-time="remoteEstimatedTime"
-                                                    :remote="isRemoteGenerating"></generation-timer>
+                                                    :estimated-time="estimatedGenerationTime"></generation-timer>
                                             </div>
                                             <div v-if="msg.role === 'assistant' && msg.uiTemplateBlocks && msg.uiTemplateBlocks.top && msg.uiTemplateBlocks.top.length"
                                                 class="ui-template-message-block ui-template-message-block-top">
@@ -479,11 +477,10 @@
                                                 class="ui-template-message-block ui-template-message-block-top">
                                                 <ui-template-pending></ui-template-pending>
                                             </div>
-                                            <!-- CoT Part -->
                                             <!-- Main Part -->
                                             <template v-if="parseCot(msg.content).main">
                                                 <template
-                                                    v-if="index === chatHistory.length - 1 && (isGenerating || isRemoteGenerating)">
+                                                    v-if="index === chatHistory.length - 1 && isGenerating">
                                                     <div v-if="processMainContent(parseCot(msg.content).main, true).text"
                                                         class="markdown-body"
                                                         :style="settings.fontSize ? { fontSize: settings.fontSize + 'px' } : {}"
@@ -523,7 +520,7 @@
                                     </div>
 
                                     <!-- Message Actions -->
-                                    <div v-if="!msg.isEditing_Message && !isMessageThinkingOrRunning(msg) && !(index === chatHistory.length - 1 && !msg.isSelf && (isGenerating || isRemoteGenerating)) && !(msg.isSelf && isConversationBusy && !chatHistory.slice(index + 1).some(m => m.isSelf))"
+                                    <div v-if="!msg.isEditing_Message && !isMessageThinkingOrRunning(msg) && !(index === chatHistory.length - 1 && !msg.isSelf && isGenerating) && !(msg.isSelf && isConversationBusy && !chatHistory.slice(index + 1).some(m => m.isSelf))"
                                         :class="['message-action-bar absolute bottom-0 -mb-9 md:-mb-10 flex items-center transition-opacity duration-200', msg.isSelf ? 'right-0' : 'left-0', isStyleFilterDetailsOpen(msg, index) ? 'opacity-100' : 'opacity-100 md:opacity-0 md:group-hover:opacity-100']">
                                         <button v-if="index === chatHistory.length - 1 && (msg.role === 'user' || chatHistory.slice(0, index).some(m => m.role === 'user'))"
                                             @click="regenerateMessage(index)"
@@ -617,7 +614,7 @@
                     </template>
 
                     <!-- Typing Indicator -->
-                    <div v-if="(isGenerating || isRemoteGenerating) && !isReceiving && !isThinking && !hasActiveToolInlineWork"
+                    <div v-if="isGenerating && !isReceiving && !isThinking && !hasActiveToolInlineWork"
                         :class="['flex w-full', settings.immersiveMode ? 'immersive-message-row justify-start' : 'standard-message-row']">
                         <div
                             :class="['flex flex-row centered-message-shell max-w-[99%]', settings.immersiveMode ? 'immersive-message-shell' : 'standard-message-shell']">
@@ -637,9 +634,7 @@
                                         <span></span><span></span><span></span>
                                     </div>
                                     <generation-timer v-if="isGenerating" :wait-time="currentWaitTime"
-                                        :estimated-time="estimatedGenerationTime"
-                                        :remote-estimated-time="remoteEstimatedTime"
-                                        :remote="isRemoteGenerating"></generation-timer>
+                                        :estimated-time="estimatedGenerationTime"></generation-timer>
                                 </div>
                             </div>
                         </div>
@@ -1103,7 +1098,7 @@
                                     <!-- Trigger Button -->
                                     <button @click.stop="showProfileDropdown = !showProfileDropdown"
                                         class="settings-action gap-2 max-w-[180px]">
-                                        <div v-if="user?.avatar"
+                                        <div v-if="user.avatar"
                                             class="w-5 h-5 rounded-full overflow-hidden flex-shrink-0">
                                             <img :src="user.avatar" class="w-full h-full object-cover">
                                         </div>
@@ -1199,7 +1194,7 @@
                                 <div class="relative group mx-auto md:mx-0 flex-shrink-0">
                                     <div class="settings-profile-avatar overflow-hidden relative cursor-pointer group"
                                         @click="$refs.userAvatarInput.click()">
-                                        <img v-if="user?.avatar" :src="user?.avatar"
+                                        <img v-if="user.avatar" :src="user.avatar"
                                             class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105">
                                         <div v-else
                                             class="w-full h-full bg-primary-50 flex items-center justify-center text-primary-600 text-3xl font-bold">
@@ -1481,16 +1476,16 @@
                                         Key</label>
                                     <div class="relative">
                                         <div
-                                            class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-primary-500 transition-colors pointer-events-none">
+                                            class="absolute left-4 top-1/2 -translate-y-1/2 z-10 text-gray-400 group-focus-within:text-primary-500 transition-colors pointer-events-none">
                                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                                     d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z">
                                                 </path>
                                             </svg>
                                         </div>
-                                        <input v-model="settings.apiKey" type="password"
-                                            class="settings-control settings-control--icon font-mono"
-                                            placeholder="sk-...">
+                                        <secret-input v-model="settings.apiKey"
+                                            input-class="settings-control settings-control--icon font-mono"
+                                            placeholder="sk-..."></secret-input>
                                     </div>
                                 </div>
 
@@ -1578,9 +1573,9 @@
                                             class="min-w-0">
                                             <label
                                                 class="settings-label">自动生图密钥</label>
-                                            <input v-model="settings.imageGenKey" type="password"
-                                                class="settings-control font-mono"
-                                                placeholder="STA1N密钥/NAI官方密钥">
+                                            <secret-input v-model="settings.imageGenKey"
+                                                input-class="settings-control font-mono"
+                                                placeholder="STA1N密钥/NAI官方密钥"></secret-input>
                                         </div>
 
                                         <!-- Image Model -->
@@ -1817,7 +1812,7 @@
                 @import="importUiTemplates" @create="createUiTemplate"
                 @update:show-settings="showUiTemplateSettings = $event"
                 @update:help-topic="settingsHelpTopic = $event"
-                @analyze="updateUiTemplatesFromChat({ manual: true })"
+                @analyze="updateUiTemplatesFromChat()"
                 @select-model="openModelSelector('uiTemplateModel')"
                 @update:analysis-depth="uiTemplateAnalysisDepthSlider = $event"
                 @edit="editUiTemplate" @delete="deleteUiTemplate">
@@ -2452,8 +2447,8 @@
         <active-tool-editor-modal :show="showActiveToolEditor" :tool="editingActiveTool.data"
             :display-description="getActiveToolDisplayDescription(editingActiveTool.data)"
             :web-tool="isWebActiveTool(editingActiveTool.data)"
-            :min-result-count="getActiveToolResultCountMin(editingActiveTool.data)"
-            :max-result-count="getActiveToolResultCountMax(editingActiveTool.data)"
+            :min-result-count="getActiveToolResultCountMin()"
+            :max-result-count="getActiveToolResultCountMax()"
             @close="showActiveToolEditor = false" @save="saveActiveTool"
             @update:result-count="editingActiveTool.data.resultCount = $event"
             @update:tavily-api-key="editingActiveTool.data.tavilyApiKey = $event"></active-tool-editor-modal>
@@ -2510,7 +2505,7 @@
                 <template v-if="cloudBackup.mode === 'upload'">
                     <ul class="mt-4 space-y-1.5 pl-4 list-disc text-[13px] leading-relaxed text-gray-500">
                         <li>上传后得到一个密钥，15 天内在其他设备点“下载备份”输入即可恢复</li>
-                        <li>单次最多 500MB，云端已有的相同内容会自动跳过</li>
+                        <li>单次最多 1GB，云端已有的相同内容会自动跳过</li>
                         <li>重新上传会生成新密钥，这台设备上一次的密钥随即作废</li>
                         <li>密钥相当于取件码，拿到的人都能下载这份备份，请勿外传</li>
                     </ul>
@@ -2523,24 +2518,15 @@
                 </template>
 
                 <template v-else>
-                    <input v-if="!cloudBackup.plan" v-model="cloudBackup.restoreKey" type="text" autocomplete="off" spellcheck="false"
-                        maxlength="24" placeholder="XXXX-XXXX-XXXX-XXXX" :disabled="cloudBackup.busy" @keydown.enter="readCloudBackup"
+                    <ul class="mt-4 space-y-1.5 pl-4 list-disc text-[13px] leading-relaxed text-gray-500">
+                        <li>本机没有的角色卡会新增进来</li>
+                        <li>本机已有、而且完全相同的角色卡，连同聊天一起跳过，保留本机的</li>
+                        <li>本机已有但内容不同的角色卡，以备份为准，连同聊天一起替换</li>
+                        <li>本机其他角色卡不受影响，完成后页面会自动刷新</li>
+                    </ul>
+                    <input v-model="cloudBackup.restoreKey" type="text" autocomplete="off" spellcheck="false"
+                        maxlength="24" placeholder="XXXX-XXXX-XXXX-XXXX" :disabled="cloudBackup.busy" @keydown.enter="startCloudRestore"
                         class="mt-4 w-full bg-gray-50/60 border border-gray-300 rounded-lg px-4 py-3 text-center font-mono text-lg tracking-widest uppercase text-gray-800 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 focus:outline-none transition-all">
-                    <div v-else-if="!cloudBackup.progress" class="mt-4 space-y-2 text-sm">
-                        <div class="flex items-center justify-between gap-3 rounded-lg bg-gray-50 px-3 py-2.5">
-                            <span class="text-gray-600">新增</span>
-                            <b class="tabular-nums text-gray-900">{{ cloudBackup.plan.added.length }} 个</b>
-                        </div>
-                        <div class="flex items-center justify-between gap-3 rounded-lg bg-gray-50 px-3 py-2.5">
-                            <span class="text-gray-600">与本机完全相同，跳过并保留本机的</span>
-                            <b class="tabular-nums text-gray-900">{{ cloudBackup.plan.skipped.length }} 个</b>
-                        </div>
-                        <div class="flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2.5">
-                            <span class="text-amber-700">本机已有但内容不同，以备份为准</span>
-                            <b class="tabular-nums text-amber-700">{{ cloudBackup.plan.replaced.length }} 个</b>
-                        </div>
-                        <p class="pt-1 text-xs leading-relaxed text-gray-400">以备份为准的角色，卡片和聊天会被替换；本机其他角色不受影响。完成后页面会自动刷新。</p>
-                    </div>
                 </template>
 
                 <div v-if="cloudBackup.progress" class="mt-5">
@@ -2559,16 +2545,10 @@
                         class="modal-primary-button flex-1 justify-center disabled:opacity-60">
                         {{ cloudBackup.busy ? '上传中...' : (cloudBackup.key ? '重新上传' : '开始上传') }}
                     </button>
-                    <button v-else-if="!cloudBackup.plan" type="button" @click="readCloudBackup" :disabled="cloudBackup.busy || !cloudBackup.restoreKey.trim()"
+                    <button v-else type="button" @click="startCloudRestore" :disabled="cloudBackup.busy || !cloudBackup.restoreKey.trim()"
                         class="modal-primary-button flex-1 justify-center disabled:opacity-60">
-                        {{ cloudBackup.busy ? '读取中...' : '读取备份' }}
+                        {{ cloudBackup.busy ? '下载中...' : '开始下载' }}
                     </button>
-                    <template v-else>
-                        <button type="button" @click="cloudBackup.plan = null" :disabled="cloudBackup.busy" class="modal-secondary-button flex-1 disabled:opacity-60">返回</button>
-                        <button type="button" @click="startCloudRestore" :disabled="cloudBackup.busy" class="modal-primary-button flex-1 justify-center disabled:opacity-60">
-                            {{ cloudBackup.busy ? '恢复中...' : '开始恢复' }}
-                        </button>
-                    </template>
                 </div>
             </div>
         </modal-shell>

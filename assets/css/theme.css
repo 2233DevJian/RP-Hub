@@ -97,11 +97,9 @@
     --c-text-3: rgb(var(--gray-500));
     --c-text-4: rgb(var(--gray-400));
     --c-accent: rgb(var(--primary-600));
-    --c-accent-hover: rgb(var(--primary-700));
     --c-accent-text: rgb(var(--primary-600));
     --c-accent-soft: rgb(var(--primary-50));
     --c-accent-edge: rgb(var(--primary-200));
-    --c-danger: rgb(var(--red-600));
     --c-danger-soft: rgb(var(--red-50));
 
     --glass-bg: rgba(255, 255, 255, 0.72);

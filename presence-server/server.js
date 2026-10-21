@@ -10,7 +10,7 @@ const versionRefreshMs = 60_000;
 let latestVersionId = 10189;
 let nextVersionRefreshAt = 0;
 let versionRefreshPromise = null;
-const allowedOrigins = String(process.env.ALLOWED_ORIGINS || '*')
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*')
     .split(',')
     .map(origin => origin.trim())
     .filter(Boolean);
@@ -67,10 +67,11 @@ const readJson = async (request) => {
 const server = http.createServer(async (request, response) => {
     const origin = request.headers.origin || '';
     const corsOrigin = getCorsOrigin(origin);
-    const url = new URL(request.url || '/', 'http://localhost');
+    const url = new URL(request.url, 'http://localhost');
+
+    if (origin && !corsOrigin) return sendJson(response, 403, { error: 'Origin not allowed' });
 
     if (request.method === 'OPTIONS') {
-        if (origin && !corsOrigin) return sendJson(response, 403, { error: 'Origin not allowed' });
         response.writeHead(204, {
             'Access-Control-Allow-Origin': corsOrigin || '*',
             'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
@@ -80,8 +81,6 @@ const server = http.createServer(async (request, response) => {
         });
         return response.end();
     }
-
-    if (origin && !corsOrigin) return sendJson(response, 403, { error: 'Origin not allowed' });
 
     if (request.method === 'GET' && url.pathname === '/health') {
         return sendJson(response, 200, { ok: true }, corsOrigin);
@@ -135,5 +134,3 @@ server.listen(port, '0.0.0.0', () => {
 const shutdown = () => flushBackupStats().then(() => server.close(() => process.exit(0)));
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
-
-export { server };
