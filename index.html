@@ -312,7 +312,7 @@
                                     {{ msg.name || (msg.role === 'user' ? user.name : (currentCharacter?.name || 'Unknown')) }}
                                 </div>
                                 <!-- Message Bubble -->
-                                <div class="group relative"
+                                <div class="group relative min-w-0 max-w-full"
                                     :class="{'w-full': messageUsesWideLayout(msg) || msg.isEditing_Message, 'message-edit-group': msg.isEditing_Message}">
                                     <div @click="handleGeneratedImageReroll($event, index)"
                                         :class="['msg-bubble-glass p-0 text-sm md:text-base leading-relaxed overflow-hidden',

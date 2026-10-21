@@ -59,6 +59,17 @@
         };
 
         const sanitizeMarkdown = (text) => DOMPurify.sanitize(marked.parse(text), cleanConfig);
+        const legacySectionLabels = {
+            konatan_planning: '原记录分析', aftertalk: '作者附言', tucao: '作者吐槽',
+            tableedit: '表格更新记录', izumiedit: '剧情摘要', danmu: '弹幕',
+            branches: '后续选项', parallel_world: '平行剧情'
+        };
+        const formatLegacySections = text => text.replace(
+            /```[\s\S]*?```|`[^`\n]*`|<(konatan_planning~?|aftertalk|tucao|tableEdit|IzumiEdit|danmu|branches|parallel_world)(?:\s[^>]*)?>([\s\S]*?)<\/\1\s*>/gi,
+            (match, tag, body) => tag
+                ? `\n\n<details class="legacy-message-section"><summary>${legacySectionLabels[tag.toLowerCase().replace(/~$/, '')]}</summary>\n\n${body.trim()}\n\n</details>\n\n`
+                : match
+        );
         const markdownOnlyRenderer = new marked.Renderer();
         markdownOnlyRenderer.html = token => String(typeof token === 'string' ? token : token.text)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -167,31 +178,34 @@
             documentNode.querySelectorAll('.memory-cite').forEach(underlineCitedSentence);
             return textNodes.length > 0;
         };
-        // 以 HTML 开头的回复不经过 Markdown，正文文字直接挂在最外层；消息容器会把最外层的每个子元素排成单独一块，
-        // 所以把带引用的那段行内内容包进段落，角标才会跟在句末。
+        // 自定义标签被清理后可能留下裸文本，补回段落以保留换行、内边距和行内引用。
         const BLOCK_TAG_PATTERN = /^(ADDRESS|ARTICLE|ASIDE|BLOCKQUOTE|DETAILS|DIV|DL|FIELDSET|FIGURE|FOOTER|FORM|H[1-6]|HEADER|HR|IFRAME|LI|MAIN|NAV|OL|P|PRE|SCRIPT|SECTION|STYLE|TABLE|UL)$/;
-        const wrapLooseCitationText = (documentNode) => {
+        const wrapLooseText = (documentNode) => {
             const body = documentNode.body;
+            let modified = false;
             const isInline = node => node && (node.nodeType === 3 || (node.nodeType === 1 && !BLOCK_TAG_PATTERN.test(node.tagName)));
             [...body.childNodes].forEach(node => {
-                if (node.parentNode !== body || node.nodeType !== 3 || !MEMORY_CITATION_PATTERN.test(node.nodeValue)) return;
+                if (node.parentNode !== body || node.nodeType !== 3 || !node.nodeValue.trim()) return;
                 let start = node;
                 let end = node;
                 while (isInline(start.previousSibling)) start = start.previousSibling;
                 while (isInline(end.nextSibling)) end = end.nextSibling;
                 const paragraph = documentNode.createElement('p');
+                paragraph.className = 'message-plain-paragraph';
                 start.before(paragraph);
                 for (let current = start, next; current; current = next) {
                     next = current === end ? null : current.nextSibling;
                     paragraph.append(current);
                 }
+                modified = true;
             });
+            return modified;
         };
         // 正则替换成 HTML、或本身以 HTML 开头的回复走单独的渲染分支，也要补上记忆引用。
         const decorateHtml = (html, role) => {
             if (role !== 'assistant' || !/\[M\d/.test(html)) return html;
             const documentNode = new DOMParser().parseFromString(html, 'text/html');
-            wrapLooseCitationText(documentNode);
+            wrapLooseText(documentNode);
             return decorateMemoryCitations(documentNode) ? documentNode.body.innerHTML : html;
         };
         // 美化正则可能会改写方括号（例如把 [状态] 变成标签），先把引用换成正则碰不到的占位符，替换完再还原。
@@ -212,6 +226,7 @@
                 const html = DOMPurify.sanitize(marked.parse(processed, { renderer: markdownOnlyRenderer }));
                 return cacheValue(renderedCache, cacheKey, decorateHtml(html, role));
             }
+            if (role === 'assistant') processed = formatLegacySections(processed);
             const trimmed = processed.trim();
             const htmlMatch = trimmed.match(/(<!doctype html>|<html\b[^>]*>)/i);
 
@@ -258,8 +273,9 @@
                 const codeBlocksChanged = replaceHtmlCodeBlocks(documentNode);
                 const paragraphsChanged = replaceEscapedHtmlParagraphs(documentNode);
                 const panelsChanged = replaceScriptedPanels(documentNode);
+                const looseTextChanged = wrapLooseText(documentNode);
                 const citationsChanged = role === 'assistant' && decorateMemoryCitations(documentNode);
-                const modified = codeBlocksChanged || paragraphsChanged || panelsChanged || citationsChanged;
+                const modified = codeBlocksChanged || paragraphsChanged || panelsChanged || looseTextChanged || citationsChanged;
                 if (modified) return cacheValue(renderedCache, cacheKey, documentNode.body.innerHTML);
             } catch (error) {
                 console.error('Error rendering HTML preview:', error);
