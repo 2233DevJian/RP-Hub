@@ -992,8 +992,17 @@ const app = createApp({
         const blockedStyleClausePattern = /(?:^|[，,；;])[^，,。！？!?；;\n*_]*(?:微微泛|因为用力|像在|风箱|手术刀|上扬|带着一种)[^，,。！？!?；;\n*_]*(?=(?:\*\*|__)?[ \t]*(?:$|[，,。！？!?；;\n]))/gm;
         const blockedStyleWordPattern = /极其/g;
         const quotedDialoguePattern = /(“[\s\S]*?”|『[\s\S]*?』|"[\s\S]*?")/g;
-        const standaloneRenderedContentPattern = /^(?:\s|<!--[\s\S]*?-->)*(?:```|<!doctype\b|<\?xml\b|<html\b|<(?:head|body|style|script|template|svg|canvas|iframe|div|section|article|aside|header|footer|main|nav|form|table|ul|ol|pre|p|img)\b)/i;
-        const isStandaloneRenderedContent = text => standaloneRenderedContentPattern.test(String(text || ''));
+        const standaloneRenderedContentPattern = /^(?:```|<!doctype\b|<\?xml\b|<html\b|<(?:head|body|style|script|template|svg|canvas|iframe|div|section|article|aside|header|footer|main|nav|form|table|ul|ol|pre|p|img)\b)/i;
+        const isStandaloneRenderedContent = (text) => {
+            let content = String(text || '').trimStart();
+            // Skip each leading comment once; repeated regex matches can backtrack exponentially.
+            while (content.startsWith('<!--')) {
+                const end = content.indexOf('-->', 4);
+                if (end < 0) return false;
+                content = content.slice(end + 3).trimStart();
+            }
+            return standaloneRenderedContentPattern.test(content);
+        };
         const loggedBlockedStyleFragments = new Set();
         const openStyleFilterMessageKey = ref('');
         const getStyleFilterMessageKey = (message, index) => String(message?.id || `message-${index}`);
@@ -3073,7 +3082,7 @@ const app = createApp({
             return Math.max(0, predictedLength);
         });
         const summaryCompressionRate = computed(() => {
-            const floorCount = getPostprocessedChatMessages(chatHistory.value, { includeSystem: false }).length;
+            const floorCount = postprocessChatHistory(chatHistory.value, { includeSystem: false }).length;
             if (floorCount <= memorySettings.summaryKeepFloors) return null;
             return conversationBodyLength.value > 0
                 ? Math.max(0, Math.round((1 - summaryCompressedBodyLength.value / conversationBodyLength.value) * 100))
@@ -6947,7 +6956,7 @@ const app = createApp({
             const branch = storyBranches.value.find(item => item.id === activeStoryBranchId.value);
             if (!branch) return;
             branch.updatedAt = Date.now();
-            branch.floorCount = getPostprocessedChatMessages(chatHistory.value, { includeSystem: false }).length;
+            branch.floorCount = postprocessChatHistory(chatHistory.value, { includeSystem: false }).length;
             branch.messageCount = chatHistory.value.filter(message => ['user', 'assistant'].includes(message?.role)).length;
             branch.wordCount = getConversationBodyLength(chatHistory.value);
         };
@@ -7155,7 +7164,7 @@ const app = createApp({
                     forkTurn = buildConversationTurnSnapshot(sourceChatHistory, { includeSystem: false }).turns.length;
                     branchClassicMemories = trimClassicMemoriesToTurn(storedClassicMemories, forkTurn);
                 }
-                const floorCount = getPostprocessedChatMessages(sourceChatHistory, { includeSystem: false }).length;
+                const floorCount = postprocessChatHistory(sourceChatHistory, { includeSystem: false }).length;
                 const wordCount = getConversationBodyLength(sourceChatHistory);
 
                 await setScopedStoredValue('chat', branchScopeId, cloneForStorage(sourceChatHistory), { clone: false });
@@ -7595,7 +7604,7 @@ const app = createApp({
                             importedBranches.forEach(branch => {
                                 if (!chatByBranch.has(branch.id)) throw new Error(`缺少分支“${branch.name}”的聊天记录`);
                                 const messages = chatByBranch.get(branch.id);
-                                branch.floorCount = getPostprocessedChatMessages(messages, { includeSystem: false }).length;
+                                branch.floorCount = postprocessChatHistory(messages, { includeSystem: false }).length;
                                 branch.messageCount = messages.filter(message => ['user', 'assistant'].includes(message.role)).length;
                                 branch.wordCount = getConversationBodyLength(messages);
                             });
@@ -7758,7 +7767,7 @@ const app = createApp({
                     const messages = chatByBranch.get(branch.id) || [];
                     return {
                         ...branch,
-                        floorCount: getPostprocessedChatMessages(messages, { includeSystem: false }).length,
+                        floorCount: postprocessChatHistory(messages, { includeSystem: false }).length,
                         messageCount: messages.filter(message => ['user', 'assistant'].includes(message?.role)).length,
                         wordCount: getConversationBodyLength(messages)
                     };
