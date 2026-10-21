@@ -175,14 +175,12 @@ const getApiErrorStatus = (payload, fallbackStatus) => {
         payload?.error?.code,
         fallbackStatus
     ];
-    return candidates.find(value => (
-        value !== undefined && value !== null && value !== '' && /^\d+$/.test(String(value))
-    )) || '';
+    return candidates.find(value => /^\d+$/.test(String(value))) || '';
 };
 
 const formatApiErrorMessage = (status, detail) => {
     const lines = [];
-    if (status !== undefined && status !== null && status !== '') lines.push(`API Error: ${status}`);
+    if (status !== '') lines.push(`API Error: ${status}`);
     lines.push(stringifyErrorDetail(detail).trim() || '请求失败');
     return lines.join('\n');
 };
@@ -267,8 +265,8 @@ window.RPHubUtils = {
 
 // --- Character-card utilities ---
 (function () {
-    const textDecoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null;
-    const textEncoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+    const textDecoder = new TextDecoder('utf-8');
+    const textEncoder = new TextEncoder();
 
     const { imageStyleArtists } = window.RPHubBuiltinContent;
     const getImageStyleArtists = (style, customArtists = '') => {
@@ -346,10 +344,9 @@ window.RPHubUtils = {
         .join('');
 
     const findUnprotectedMatches = (text, pattern, { includeUiTemplateUpdates = false } = {}) => {
-        const source = String(text || '');
         let offset = 0;
         const matches = [];
-        splitProtectedText(source).forEach(({ text: part, protected: isProtected }) => {
+        splitProtectedText(text).forEach(({ text: part, protected: isProtected }) => {
             // 变量解析器只需看到块的开标签；块内 JSON 仍不参与普通匹配。
             const searchable = !isProtected ? part : includeUiTemplateUpdates
                 ? (part.match(/^<ui_template_updates\b[^>]*>/i)?.[0] || '') : '';
@@ -372,45 +369,13 @@ window.RPHubUtils = {
         return match ? { index: match.index, text: match[0] } : null;
     };
 
-    const encodeUtf8 = (value) => {
-        if (textEncoder) return textEncoder.encode(String(value ?? ''));
-        const encoded = encodeURIComponent(String(value ?? ''));
-        const bytes = [];
-        for (let i = 0; i < encoded.length; i += 1) {
-            if (encoded[i] === '%') {
-                bytes.push(parseInt(encoded.slice(i + 1, i + 3), 16));
-                i += 2;
-            } else {
-                bytes.push(encoded.charCodeAt(i));
-            }
-        }
-        return new Uint8Array(bytes);
-    };
+    const encodeUtf8 = (value) => textEncoder.encode(value);
 
-    const decodeUtf8 = (bytes) => {
-        if (textDecoder) return textDecoder.decode(bytes);
-        let encoded = '';
-        for (let i = 0; i < bytes.length; i += 1) {
-            const hex = bytes[i].toString(16);
-            encoded += '%' + (hex.length === 1 ? '0' + hex : hex);
-        }
-        try {
-            return decodeURIComponent(encoded);
-        } catch (_) {
-            let text = '';
-            for (let i = 0; i < bytes.length; i += 1) {
-                text += String.fromCharCode(bytes[i]);
-            }
-            return text;
-        }
-    };
+    const decodeUtf8 = (bytes) => textDecoder.decode(bytes);
 
     const toBytes = (value) => {
         if (value instanceof Uint8Array) return value;
         if (value instanceof ArrayBuffer) return new Uint8Array(value);
-        if (ArrayBuffer.isView(value)) {
-            return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-        }
         throw new TypeError('Expected ArrayBuffer or Uint8Array');
     };
 
@@ -436,6 +401,13 @@ window.RPHubUtils = {
         }
     };
 
+    const readPngChunkType = (view, offset) => String.fromCharCode(
+        view.getUint8(offset + 4),
+        view.getUint8(offset + 5),
+        view.getUint8(offset + 6),
+        view.getUint8(offset + 7)
+    );
+
     const readPngChunks = (buffer) => {
         const bytes = toBytes(buffer);
         const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -445,12 +417,7 @@ window.RPHubUtils = {
         try {
             while (offset + 8 <= bytes.byteLength) {
                 const length = view.getUint32(offset, false);
-                const type = String.fromCharCode(
-                    view.getUint8(offset + 4),
-                    view.getUint8(offset + 5),
-                    view.getUint8(offset + 6),
-                    view.getUint8(offset + 7)
-                );
+                const type = readPngChunkType(view, offset);
                 const dataStart = offset + 8;
                 const dataEnd = dataStart + length;
                 if (dataEnd + 4 > bytes.byteLength) break;
@@ -517,8 +484,6 @@ window.RPHubUtils = {
             throw error;
         }
         return {
-            chunks,
-            payload,
             data: parseCharacterPayload(payload)
         };
     };
@@ -552,10 +517,8 @@ window.RPHubUtils = {
         return !!value;
     };
 
-    const normalizeRegexScript = (script = {}, options = {}) => {
+    const normalizeRegexScript = (script = {}, options) => {
         const normalized = { ...script };
-        const fallbackScope = options.fallbackScope || 'character';
-        const systemNames = Array.isArray(options.systemNames) ? options.systemNames : [];
         if (normalized.disabled !== undefined) normalized.enabled = !normalized.disabled;
         else if (normalized.enabled === undefined) normalized.enabled = true;
         if (!normalized.name && normalized.scriptName) normalized.name = normalized.scriptName;
@@ -571,15 +534,15 @@ window.RPHubUtils = {
         if (normalized.minDepth === undefined) normalized.minDepth = null;
         if (normalized.maxDepth === undefined) normalized.maxDepth = null;
         normalized.scope = normalized.scope === 'global'
-            || fallbackScope === 'global'
-            || systemNames.includes(normalized.name || normalized.scriptName)
+            || options.fallbackScope === 'global'
+            || options.systemNames.includes(normalized.name || normalized.scriptName)
             ? 'global'
             : 'character';
         delete normalized.disabled;
         return normalized;
     };
 
-    const normalizeImportedRegexScript = (script = {}, options = {}) => {
+    const normalizeImportedRegexScript = (script = {}, options) => {
         const normalized = { ...script };
         if (!normalized.name) normalized.name = normalized.scriptName || 'Regex Script';
         if (!normalized.regex) normalized.regex = normalized.findRegex || '';
@@ -602,13 +565,12 @@ window.RPHubUtils = {
         return normalizeRegexScript(normalized, options);
     };
 
-    const normalizeWorldInfoEntry = (entry = {}, options = {}) => {
+    const normalizeWorldInfoEntry = (entry = {}, options) => {
         const mergedEntry = { ...entry };
         Object.entries(entry.extensions || {}).forEach(([key, value]) => {
             if (value !== undefined && value !== null) mergedEntry[key] = value;
         });
         delete mergedEntry.extensions;
-        const systemNames = Array.isArray(options.systemNames) ? options.systemNames : [];
         const normalizeBoolean = (value, fallback) => {
             if (value === undefined || value === null) return fallback;
             if (typeof value === 'string') {
@@ -659,7 +621,7 @@ window.RPHubUtils = {
             content: getValue(['content'], ''),
             enabled: normalizeBoolean(getValue(['enabled'], true), true)
                 && !normalizeBoolean(getValue(['disable', 'disabled'], false), false),
-            scope: systemNames.includes(comment) || getValue(['scope'], 'character') === 'global' ? 'global' : 'character',
+            scope: options.systemNames.includes(comment) || getValue(['scope'], 'character') === 'global' ? 'global' : 'character',
             keys,
             useRegex: normalizeBoolean(getValue(['use_regex', 'useRegex'], false), false),
             constant: normalizeBoolean(getValue(['constant'], false), false),
@@ -781,13 +743,13 @@ window.RPHubUtils = {
         };
     };
 
-    const toUiTemplateExportEntry = (template = {}, options = {}) => {
+    const toUiTemplateExportEntry = (template = {}) => {
         const variableState = cloneJsonValue(template.variableState, {});
         return {
             id: template.id,
             name: template.name || 'UI模板',
             enabled: template.enabled !== false,
-            scope: options.scope || template.scope || 'character',
+            scope: template.scope || 'character',
             order: toNumber(template.order, 100),
             placement: ['top', 'bottom'].includes(template.placement) ? template.placement : 'bottom',
             htmlTemplate: template.htmlTemplate || template.template || '',
@@ -882,12 +844,7 @@ window.RPHubUtils = {
 
         while (offset + 8 <= pngBytes.byteLength) {
             const length = view.getUint32(offset, false);
-            const type = String.fromCharCode(
-                view.getUint8(offset + 4),
-                view.getUint8(offset + 5),
-                view.getUint8(offset + 6),
-                view.getUint8(offset + 7)
-            );
+            const type = readPngChunkType(view, offset);
             const nextOffset = offset + 12 + length;
             if (type === 'IHDR') {
                 insertPos = nextOffset;
@@ -965,11 +922,9 @@ window.RPHubUtils = {
     window.RPHubCardUtils = {
         blobToDataUrl,
         buildCharacterCardData,
-        decodeBase64Utf8,
         downloadBlob,
         encodeBase64Utf8,
         extractNativeReasoning,
-        findPngCharacterPayload,
         findLastUnprotectedMatch,
         findUnprotectedMatches,
         isNativeReasoningPart,
@@ -981,10 +936,8 @@ window.RPHubUtils = {
         normalizeRegexModifiers,
         normalizeWorldInfoEntry,
         parseImportedCharacterCard,
-        parseCharacterPayload,
         parseWorldInfoKeysText,
         parsePngCharacterData,
-        readPngChunks,
         toBoolean,
         toNumber,
         toRegexExportEntry,

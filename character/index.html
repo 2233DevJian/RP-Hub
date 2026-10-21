@@ -96,12 +96,6 @@
             backdrop-filter: none !important;
             transition: background-color var(--dur-3) var(--ease-out);
         }
-        .modal-open + .modal-backdrop,
-        .modal-open ~ .modal-backdrop {
-            background-color: var(--overlay) !important;
-            -webkit-backdrop-filter: blur(6px) !important;
-            backdrop-filter: blur(6px) !important;
-        }
 
         /* Drawer overlay blurs only while open. */
         .drawer-overlay {
@@ -725,7 +719,7 @@
                                 <div
                                     class="absolute top-2 left-1/2 -translate-x-1/2 z-20 badge badge-error badge-outline font-bold shadow-sm bg-base-100">
                                     修改前</div>
-                                <iframe v-if="originalPreviewHTML" :srcdoc="originalPreviewHTML"
+                                <iframe :srcdoc="originalPreviewHTML"
                                     class="w-full h-full border-0" sandbox="allow-scripts allow-same-origin"></iframe>
                             </div>
                             <div class="flex-1 flex-col h-full relative"
@@ -1374,7 +1368,7 @@
                         </button>
                     </div>
 
-                    <ul ref="sidebarList" @scroll="handleSidebarScroll"
+                    <ul @scroll="handleSidebarScroll"
                         class="workshop-sidebar-scroll flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar overflow-x-hidden relative">
                         <!-- Top Spacer -->
                         <div :style="{ height: sidebarPaddingTop + 'px' }" class="w-full shrink-0"></div>
@@ -1450,7 +1444,7 @@
     </div>
 
     <script>
-        const { createApp, ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } = Vue;
+        const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
         const AddItemButton = {
             emits: ['add'],
             template: `
@@ -1637,7 +1631,6 @@ You are carrying out a fictional character card creation and editing task. Act a
                 // Virtual List State
                 const sidebarScrollTop = ref(0);
                 const sidebarVisibleHeight = ref(1024); // 默认设置较大高度避免没触发 scroll 事件时只渲染少量条目
-                const sidebarList = ref(null);
                 const itemHeight = 72; // Avg height of item + gap
 
                 const handleSidebarScroll = (e) => {
@@ -1646,7 +1639,6 @@ You are carrying out a fictional character card creation and editing task. Act a
                 };
 
                 const virtualCharacters = computed(() => {
-                    if (!characters.value) return [];
                     const start = Math.floor(sidebarScrollTop.value / itemHeight);
                     const count = Math.ceil(sidebarVisibleHeight.value / itemHeight) + 4;
                     const offset = Math.max(0, start - 2);
@@ -1698,7 +1690,7 @@ You are carrying out a fictional character card creation and editing task. Act a
                 };
 
                 const getActiveModelTypeFromMainSettings = (mainSettings) => {
-                    const selectedModel = String(mainSettings?.model || '');
+                    const selectedModel = String(mainSettings.model || '');
                     if (!selectedModel) return null;
                     if (selectedModel === mainSettings.fastModel) return 'fast';
                     if (selectedModel === mainSettings.balancedModel) return 'balanced';
@@ -1748,7 +1740,7 @@ You are carrying out a fictional character card creation and editing task. Act a
                     });
 
                     // Inform parent that workshop is ready to receive sync
-                    if (window.parent && window.parent !== window) {
+                    if (isEmbedded) {
                         window.parent.postMessage({ type: 'WORKSHOP_READY' }, '*');
                     }
                 };
@@ -2019,13 +2011,12 @@ You are carrying out a fictional character card creation and editing task. Act a
                     return cardUtils.toRegexExportEntry(normalized);
                 };
 
-                const toWorldInfoExportEntry = (entry, index = 0) => {
+                const toWorldInfoExportEntry = (entry) => {
                     const normalized = normalizeWorldInfoEntry(entry);
                     return cardUtils.toWorldInfoExportEntry(normalized);
                 };
 
                 const normalizeCharacterShape = (char) => {
-                    if (!char) return char;
                     delete char.scenario;
                     delete char.uiTemplates;
                     delete char.ui_templates;
@@ -2063,7 +2054,7 @@ You are carrying out a fictional character card creation and editing task. Act a
                     return [];
                 };
 
-                const buildCharacterFromImport = (rawData, avatarUrl = null) => {
+                const buildCharacterFromImport = (rawData, avatarUrl) => {
                     const root = rawData || {};
                     const data = root.data && typeof root.data === 'object' ? root.data : root;
                     const rootExtensions = root.extensions && typeof root.extensions === 'object' ? root.extensions : {};
@@ -2090,7 +2081,7 @@ You are carrying out a fictional character card creation and editing task. Act a
                         creator_notes: data.creator_notes || data.creatorcomment || data.creator_comment || '',
                         system_prompt: data.system_prompt || '',
                         post_history_instructions: data.post_history_instructions || '',
-                        tags: Array.isArray(data.tags) ? data.tags : [],
+                        tags: data.tags,
                         avatar: avatarUrl || data.avatar || data.avatar_url || root.avatar || null,
                         avatar_prompt: data.avatar_prompt || dataExtensions.avatar_prompt || root.avatar_prompt || '',
                         worldInfo: worldEntries,
@@ -2098,17 +2089,17 @@ You are carrying out a fictional character card creation and editing task. Act a
                     });
                 };
 
-                const applyImportedCharacter = (rawData, avatarUrl = null) => {
+                const applyImportedCharacter = (rawData, avatarUrl) => {
                     const importedCharacter = buildCharacterFromImport(rawData, avatarUrl);
                     characters.value.push(importedCharacter);
                     currentCharacterIndex.value = characters.value.length - 1;
                     activeTab.value = 'basic';
                     isSidebarOpen.value = false;
-                    showToast(`已导入角色卡：${importedCharacter.name || '未命名角色'}`, 'success');
+                    showToast(`已导入角色卡：${importedCharacter.name}`, 'success');
                 };
 
                 const importCharacterCard = (event) => {
-                    const file = event.target.files?.[0];
+                    const file = event.target.files[0];
                     if (!file) return;
                     event.target.value = '';
 
@@ -2197,9 +2188,7 @@ You are carrying out a fictional character card creation and editing task. Act a
                     try {
                         const json = JSON.stringify(newVal);
                         await localforage.setItem('ai_chargen_characters', json);
-                        if (storageQuotaExceeded.value) {
-                            storageQuotaExceeded.value = false;
-                        }
+                        storageQuotaExceeded.value = false;
                     } catch (e) {
                         console.error('Storage Save Error:', e);
                         if (e.name === 'QuotaExceededError') {
@@ -2219,8 +2208,8 @@ You are carrying out a fictional character card creation and editing task. Act a
                 const currentCharacter = computed(() => characters.value[currentCharacterIndex.value]);
                 const worldInfo = computed(() => currentCharacter.value.worldInfo);
                 const regexScripts = computed(() => currentCharacter.value.regexScripts);
-                const readJsonFile = (event, onData, errorMessage = '导入失败') => {
-                    const file = event.target.files?.[0];
+                const readJsonFile = (event, onData, errorMessage) => {
+                    const file = event.target.files[0];
                     if (!file) return;
                     event.target.value = '';
 
@@ -2278,29 +2267,25 @@ You are carrying out a fictional character card creation and editing task. Act a
                     }, '正则导入失败');
                 };
 
-                const applyRegex = (text, scripts, options = {}) => {
-                    if (!text) return '';
+                const applyRegex = (text, scripts) => {
                     let processed = text;
 
-                    const { isDisplay = true, isPrompt = false, role = 'assistant', depth = 0 } = options;
                     const orderedScripts = [...scripts].sort((a, b) => {
-                        const aIsImageGen = (a.name || a.scriptName) === 'NAI画图正则';
-                        const bIsImageGen = (b.name || b.scriptName) === 'NAI画图正则';
+                        const aIsImageGen = a.name === 'NAI画图正则';
+                        const bIsImageGen = b.name === 'NAI画图正则';
                         return aIsImageGen === bIsImageGen ? 0 : (aIsImageGen ? 1 : -1);
                     });
                     for (const rawScript of orderedScripts) {
                         const script = normalizeRegexScript(rawScript);
                         if (!script.enabled) continue;
-                        if (role === 'user' && !script.placement.includes(1)) continue;
-                        if (role === 'assistant' && !script.placement.includes(2)) continue;
-                        if (isDisplay && script.promptOnly) continue;
-                        if (isPrompt && script.markdownOnly) continue;
-                        if (script.minDepth !== null && depth < script.minDepth) continue;
-                        if (script.maxDepth !== null && depth > script.maxDepth) continue;
+                        if (!script.placement.includes(2)) continue;
+                        if (script.promptOnly) continue;
+                        if (script.minDepth > 0) continue;
+                        if (script.maxDepth < 0) continue;
 
                         try {
-                            let regexPattern = script.regex || '';
-                            let flags = script.flags || 'g';
+                            let regexPattern = script.regex;
+                            let flags = script.flags;
                             if (!regexPattern) continue;
 
                             ({ pattern: regexPattern, flags } = cardUtils.normalizeRegexModifiers(regexPattern, flags));
@@ -2342,7 +2327,6 @@ You are carrying out a fictional character card creation and editing task. Act a
                     } else {
                         // 如果没有检测到 HTML 块，则提供一个基础的 HTML 结构，以便注入样式和脚本并显示正文
                         uiHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"><script src="https://cdn.tailwindcss.com"></` + `script></head><body class="bg-base-100 p-4"></body></html>`;
-                        textContent = fullText;
                     }
 
                     // 注入交互脚本垫片 (Shim) 和 强制样式
@@ -2406,7 +2390,7 @@ You are carrying out a fictional character card creation and editing task. Act a
                     }
 
                     // 3. 注入
-                    if (renderedText && uiHTML) {
+                    if (renderedText) {
                         const bodyMatch = uiHTML.match(/<body[^>]*>/i);
                         if (bodyMatch) {
                             const insertIndex = bodyMatch.index + bodyMatch[0].length;
@@ -2415,8 +2399,6 @@ You are carrying out a fictional character card creation and editing task. Act a
                         } else {
                             uiHTML = renderedText + uiHTML;
                         }
-                    } else if (!uiHTML && renderedText) {
-                        uiHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body class="p-4" style="white-space: pre-wrap;">${renderedText}</body></html>`;
                     }
 
                     return uiHTML;
@@ -2467,16 +2449,13 @@ You are carrying out a fictional character card creation and editing task. Act a
                 const deleteAllCharacters = async () => {
                     characters.value = [];
                     createNewCharacter();
-                    currentCharacterIndex.value = 0;
                     // Force update storage
                     await localforage.setItem('ai_chargen_characters', JSON.stringify(characters.value));
                     showToast('所有角色已清空', 'success');
                 };
 
                 const confirmAction = () => {
-                    if (confirmModal.action) {
-                        confirmModal.action();
-                    }
+                    confirmModal.action();
                     confirmModal.show = false;
                 };
 
@@ -2555,11 +2534,7 @@ You are carrying out a fictional character card creation and editing task. Act a
                 };
 
                 const generateDiff = async () => {
-                    const finalPrompt = diffPrompt.value || prompt.value;
-                    if (!finalPrompt) {
-                        showToast('请输入修改要求', 'error');
-                        return;
-                    }
+                    const finalPrompt = diffPrompt.value;
                     if (isGenerating.value) return;
 
                     showDiffInputModal.value = false;
@@ -2610,12 +2585,9 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
 
     请根据用户的具体指令，通过 \`edit_character_card\` 按编号提交修改方案。`;
 
-                    const systemPrompt = singlePlayerDiffSystemPrompt;
-
                     try {
-                        generationStatus.value = '正在等待API响应...';
                         const result = await requestWorkshopCompletion([
-                            { role: 'system', content: systemPrompt },
+                            { role: 'system', content: singlePlayerDiffSystemPrompt },
                             { role: 'user', content: context + `\n\n用户修改指令：${finalPrompt}` }
                         ], {
                             stream: api.stream, temperature: 0.7,
@@ -2651,7 +2623,7 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
                 const snapshotEditSource = (char) => ({
                     fields: Object.fromEntries(editTextFields.map(field => [field, String(char[field] ?? '')])),
                     ...Object.fromEntries(Object.entries(editEntryKinds).map(([kind, { field }]) => [
-                        kind, (Array.isArray(char[field]) ? char[field] : []).map(entry => toEditableEntry(kind, entry))
+                        kind, char[field].map(entry => toEditableEntry(kind, entry))
                     ]))
                 });
 
@@ -2667,7 +2639,7 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
                 const formatEditEntry = (kind, entry) => (kind === 'world_info'
                     ? [
                         `名称：${entry.comment}`,
-                        `位置：${worldInfoPositionOptions.find(option => option.value === entry.position)?.label || entry.position} · ${entry.constant ? '常驻' : '关键词触发'} · ${entry.enabled ? '启用' : '停用'}`,
+                        `位置：${worldInfoPositionOptions.find(option => option.value === entry.position).label} · ${entry.constant ? '常驻' : '关键词触发'} · ${entry.enabled ? '启用' : '停用'}`,
                         `关键词：${entry.keys.join('、') || '（无）'}`,
                         `内容：\n${entry.content}`
                     ]
@@ -2821,7 +2793,7 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
                         system_prompt: '系统提示',
                         post_history_instructions: '后续指令'
                     };
-                    return map[key] || key;
+                    return map[key];
                 };
 
                 const applyConfirmedDiffs = () => {
@@ -2881,7 +2853,6 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
                 // Auto resize textarea
                 const autoResize = () => {
                     const el = promptInput.value;
-                    if (!el) return;
 
                     // Reset height to auto to correctly calculate scrollHeight for shrinking
                     el.style.height = 'auto';
@@ -2909,11 +2880,6 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
                         autoResize();
                     });
                     window.addEventListener('resize', updateGlider, { passive: true });
-                });
-
-                onBeforeUnmount(() => {
-                    window.removeEventListener('resize', updateGlider);
-                    delete window.triggerSlash;
                 });
 
                 // Avatar Caching Logic
@@ -2964,21 +2930,14 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
 
                 // Avatar Helpers
                 const generateAvatarUrl = (tag) => {
-                    let url;
                     const tokenParam = options.imageGenKey.trim();
                     const targetArtists = options.imageArtists;
 
-                    const baseUrl = IMAGE_GEN_BASE_URL;
-                    url = `${baseUrl}/generate?tag=${encodeURIComponent(tag)}&token=${tokenParam}&model=${options.imageModel}&artist=${encodeURIComponent(targetArtists)}&size=竖图&steps=40&scale=6&cfg=0&sampler=k_dpmpp_2m_sde&negative={{{{bad anatomy}}}},{bad feet},bad hands,{{{bad proportions}}},{blurry},cloned face,cropped,{{{deformed}}},{{{disfigured}}},error,{{{extra arms}}},{extra digit},{{{extra legs}}},extra limbs,{{extra limbs}},{fewer digits},{{{fused fingers}}},gross proportions,ink eyes,ink hair,jpeg artifacts,{{{{long neck}}}},low quality,{malformed limbs},{{missing arms}},{missing fingers},{{missing legs}},{{{more than 2 nipples}}},mutated hands,{{{mutation}}},normal quality,owres,{{poorly drawn face}},{{poorly drawn hands}},reen eyes,signature,text,{{too many fingers}},{{{ugly}}},username,uta,watermark,worst quality,{{{more than 2 legs}}},awkward hand sign,weird hand gesture,contorted hand,unnatural finger pose,deformed hand gesture{shaka},{hang loose},{{rock on}},{shaka sign}&nocache=0&noise_schedule=karras`;
-                    return url;
+                    return `${IMAGE_GEN_BASE_URL}/generate?tag=${encodeURIComponent(tag)}&token=${tokenParam}&model=${options.imageModel}&artist=${encodeURIComponent(targetArtists)}&size=竖图&steps=40&scale=6&cfg=0&sampler=k_dpmpp_2m_sde&negative={{{{bad anatomy}}}},{bad feet},bad hands,{{{bad proportions}}},{blurry},cloned face,cropped,{{{deformed}}},{{{disfigured}}},error,{{{extra arms}}},{extra digit},{{{extra legs}}},extra limbs,{{extra limbs}},{fewer digits},{{{fused fingers}}},gross proportions,ink eyes,ink hair,jpeg artifacts,{{{{long neck}}}},low quality,{malformed limbs},{{missing arms}},{missing fingers},{{missing legs}},{{{more than 2 nipples}}},mutated hands,{{{mutation}}},normal quality,owres,{{poorly drawn face}},{{poorly drawn hands}},reen eyes,signature,text,{{too many fingers}},{{{ugly}}},username,uta,watermark,worst quality,{{{more than 2 legs}}},awkward hand sign,weird hand gesture,contorted hand,unnatural finger pose,deformed hand gesture{shaka},{hang loose},{{rock on}},{shaka sign}&nocache=0&noise_schedule=karras`;
                 };
 
                 const rerollAvatar = () => {
                     const prompt = currentCharacter.value.avatar_prompt;
-                    if (!prompt) {
-                        showToast('当前没有可用的头像提示词', 'warning');
-                        return;
-                    }
 
                     let tags = prompt.split(',').map(t => t.trim()).filter(t => t);
 
@@ -3010,9 +2969,7 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
                     if (!prompt.value) return;
 
                     // 点击发送后自动收起输入框高度
-                    if (promptInput.value) {
-                        promptInput.value.style.height = '';
-                    }
+                    promptInput.value.style.height = '';
 
                     // Check if current character is blank
                     const char = currentCharacter.value;
@@ -3104,8 +3061,6 @@ ${FIRST_MESSAGE_FINAL_CHECKS}
 请确保内容丰富、生动，符合用户描述。确保所有设置都已按要求生成。不要输出任何思考过程。
 JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**严禁**在 JSON 字符串内部出现未转义的双引号。`;
 
-                    const systemPrompt = singlePlayerSystemPrompt;
-
                     const performGeneration = async (isRetry = false) => {
                         let fullContent = '';
 
@@ -3115,47 +3070,42 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                             generationStatus.value = '兼容模式重试中，请耐心等待…';
                         }
 
-                        try {
-                            if (!isRetry) generationStatus.value = '正在等待API响应...';
-                            await requestWorkshopCompletion([
-                                { role: 'system', content: systemPrompt + (isRetry
-                                    ? `\n\n${window.RPHubBuiltinContent.prompts.replyToolInstruction}\n将完整角色卡放入工具的 content 字段，保留上述所有章节标题和 JSON 格式。`
-                                    : '') },
-                                { role: 'user', content: `### 用户的描述\n${prompt.value}\n\n请开始生成。` }
-                            ], {
-                                stream: api.stream, temperature: 1, replyInTool: isRetry,
-                                onContent: content => { fullContent = content; parseBuffer(content); }
-                            });
+                        await requestWorkshopCompletion([
+                            { role: 'system', content: singlePlayerSystemPrompt + (isRetry
+                                ? `\n\n${window.RPHubBuiltinContent.prompts.replyToolInstruction}\n将完整角色卡放入工具的 content 字段，保留上述所有章节标题和 JSON 格式。`
+                                : '') },
+                            { role: 'user', content: `### 用户的描述\n${prompt.value}\n\n请开始生成。` }
+                        ], {
+                            stream: api.stream, temperature: 1, replyInTool: isRetry,
+                            onContent: content => { fullContent = content; parseBuffer(content); }
+                        });
 
-                            // Check for truncation: both the avatar prompt and parsed regex scripts are required.
-                            const hasAvatarPrompt = /<image>[\s\S]*?<\/image>/i.test(fullContent);
-                            const hasValidRegex = /### Regex Scripts/i.test(fullContent)
-                                && currentCharacter.value.regexScripts?.length > 0;
+                        // Check for truncation: both the avatar prompt and parsed regex scripts are required.
+                        const hasAvatarPrompt = /<image>[\s\S]*?<\/image>/i.test(fullContent);
+                        const hasValidRegex = /### Regex Scripts/i.test(fullContent)
+                            && currentCharacter.value.regexScripts.length > 0;
 
-                            // 兼容模式重试专门应对 Gemini 的截断，其他模型不重试。
-                            if ((!hasAvatarPrompt || !hasValidRegex) && !isRetry && /gemini/i.test(api.model)) {
-                                console.warn(`检测到内容截断: Avatar=${hasAvatarPrompt}, ValidRegex=${hasValidRegex}`);
-                                showToast('检测到内容截断，正在进行兼容模式重试…', 'warning');
-                                await performGeneration(true);
-                                return;
-                            }
-
-                            generationProgress.value = 100;
-                            generationStatus.value = '生成完成';
-                            // 清除开场白中的 ** 符号
-                            if (currentCharacter.value.first_mes) {
-                                currentCharacter.value.first_mes = currentCharacter.value.first_mes.replace(/\*\*/g, '');
-                            }
-
-                            // 提示密钥未配置
-                            if (!options.imageGenKey && currentCharacter.value.avatar_prompt) {
-                                showToast('生图密钥未配置，已跳过图片生成', 'info');
-                            }
-
-                            showToast('角色卡生成完成！', 'success');
-                        } catch (error) {
-                            throw error;
+                        // 兼容模式重试专门应对 Gemini 的截断，其他模型不重试。
+                        if ((!hasAvatarPrompt || !hasValidRegex) && !isRetry && /gemini/i.test(api.model)) {
+                            console.warn(`检测到内容截断: Avatar=${hasAvatarPrompt}, ValidRegex=${hasValidRegex}`);
+                            showToast('检测到内容截断，正在进行兼容模式重试…', 'warning');
+                            await performGeneration(true);
+                            return;
                         }
+
+                        generationProgress.value = 100;
+                        generationStatus.value = '生成完成';
+                        // 清除开场白中的 ** 符号
+                        if (currentCharacter.value.first_mes) {
+                            currentCharacter.value.first_mes = currentCharacter.value.first_mes.replace(/\*\*/g, '');
+                        }
+
+                        // 提示密钥未配置
+                        if (!options.imageGenKey && currentCharacter.value.avatar_prompt) {
+                            showToast('生图密钥未配置，已跳过图片生成', 'info');
+                        }
+
+                        showToast('角色卡生成完成！', 'success');
                     };
 
                     try {
@@ -3196,7 +3146,7 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                     }
                 };
 
-                const extractCompleteJsonObjects = (text = '') => {
+                const extractCompleteJsonObjects = (text) => {
                     const values = [];
                     let start = -1;
                     let depth = 0;
@@ -3373,18 +3323,13 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                 const getCardData = () => {
                     const char = currentCharacter.value;
                     return cardUtils.buildCharacterCardData(char, {
-                        worldInfoMapper: (entry, idx) => toWorldInfoExportEntry(entry, idx),
-                        regexScriptMapper: (script) => toRegexExportEntry(script),
+                        worldInfoMapper: toWorldInfoExportEntry,
+                        regexScriptMapper: toRegexExportEntry,
                         includeUiTemplates: false
                     });
                 };
 
                 const importAndPlay = () => {
-                    if (!isEmbedded || isImporting.value || isGenerating.value || isAvatarLoading.value) return;
-                    if (!currentCharacter.value.name.trim()) {
-                        showToast('请先填写角色卡名称', 'error');
-                        return;
-                    }
                     try {
                         isImporting.value = true;
                         window.parent.postMessage({
@@ -3406,8 +3351,8 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                     return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || defaultName;
                 };
 
-                const sanitizeFilenamePart = (name, defaultName = 'item') => {
-                    return sanitizeFilename(String(name || '').replace(/\s+/g, '_'), defaultName).slice(0, 48) || defaultName;
+                const sanitizeFilenamePart = (name, defaultName) => {
+                    return sanitizeFilename(String(name || '').replace(/\s+/g, '_'), defaultName).slice(0, 48);
                 };
 
                 const downloadFile = (blob, filename) => {
@@ -3422,11 +3367,6 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                 };
 
                 const exportPNG = async () => {
-                    if (!currentCharacter.value.avatar) {
-                        alert('请先上传或生成一张头像');
-                        return;
-                    }
-
                     const imageOptions = {};
                     if (/^https?:\/\//i.test(currentCharacter.value.avatar)) {
                         imageOptions.crossOrigin = 'anonymous';
@@ -3460,17 +3400,15 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                             title: '世界书',
                             suffix: 'world_info',
                             source: worldInfo.value,
-                            name: (entry, index) => entry.comment || entry.name || entry.keys?.[0] || `世界书条目 ${index + 1}`,
-                            description: (entry) => Array.isArray(entry.keys) && entry.keys.length ? entry.keys.join('、') : entry.content,
-                            build: (items) => ({ entries: items.map((entry, index) => toWorldInfoExportEntry(entry, index)) })
+                            name: (entry, index) => entry.comment || entry.name || entry.keys[0] || `世界书条目 ${index + 1}`,
+                            build: (items) => ({ entries: items.map(toWorldInfoExportEntry) })
                         },
                         regex: {
                             title: '正则',
                             suffix: 'regex_scripts',
                             source: regexScripts.value,
                             name: (script, index) => script.name || `正则脚本 ${index + 1}`,
-                            description: (script) => script.regex,
-                            build: (items) => items.map(script => toRegexExportEntry(script))
+                            build: (items) => items.map(toRegexExportEntry)
                         }
                     };
                     return configs[type];
@@ -3478,22 +3416,20 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
 
                 const buildSelectiveExportFilename = (type, selectedItems, selectedMeta) => {
                     const config = getSelectiveExportConfig(type);
-                    const characterName = sanitizeFilenamePart(currentCharacter.value?.name, 'character');
+                    const characterName = sanitizeFilenamePart(currentCharacter.value.name, 'character');
                     if (selectedItems.length === 1) {
-                        return `${characterName}_${config.suffix}_${sanitizeFilenamePart(selectedMeta[0]?.name, config.suffix)}.json`;
+                        return `${characterName}_${config.suffix}_${sanitizeFilenamePart(selectedMeta[0].name, config.suffix)}.json`;
                     }
                     return `${characterName}_${config.suffix}_${selectedItems.length}items.json`;
                 };
 
                 const openSelectiveExport = (type) => {
                     const config = getSelectiveExportConfig(type);
-                    if (!config || !config.source.length) return;
                     exportPicker.type = type;
                     exportPicker.title = config.title;
                     exportPicker.items = config.source.map((item, index) => ({
                         index,
-                        name: config.name(item, index),
-                        description: String(config.description(item, index) || '').slice(0, 120)
+                        name: config.name(item, index)
                     }));
                     exportPicker.selected = exportPicker.items.map(() => true);
                     exportPicker.show = true;
@@ -3506,12 +3442,7 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
 
                 const confirmSelectiveExport = () => {
                     const config = getSelectiveExportConfig(exportPicker.type);
-                    if (!config) return;
                     const selectedMeta = exportPicker.items.filter((_, index) => exportPicker.selected[index]);
-                    if (selectedMeta.length === 0) {
-                        showToast('请至少选择一个条目', 'warning');
-                        return;
-                    }
                     const selectedItems = selectedMeta.map(item => config.source[item.index]);
                     const data = config.build(selectedItems);
                     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -3539,7 +3470,6 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                     options,
                     activeModelType,
                     setActiveModel,
-                    characters,
                     currentCharacterIndex,
                     currentCharacter,
                     worldInfo,
@@ -3548,7 +3478,6 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                     tabs,
                     createNewCharacter,
                     switchCharacter,
-                    deleteCharacter,
                     addWorldEntry,
                     removeWorldEntry,
                     importWorldInfoFile,
@@ -3560,7 +3489,6 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                     toggleFlag,
                     handleImageUpload,
                     importCharacterCard,
-                    cacheAvatar,
                     rerollAvatar,
                     generateCharacter,
                     generateDiff,
@@ -3595,7 +3523,6 @@ JSON 字段（世界书/正则脚本）必须输出为合法的 JSON 数组，**
                     virtualCharacters,
                     sidebarPaddingTop,
                     sidebarBottomHeight,
-                    sidebarList,
                     handleSidebarScroll,
                     promptInput,
 
